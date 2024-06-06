@@ -1,0 +1,26 @@
+README
+
+Data Pipeline
+
+01 collect initial data             (data understanding)
+02 initial data collection report   (data understanding)
+03 data cleaning                    (data preparation)
+04 initial data exploration         (data understanding)
+05 prepare data for analysis        (data preparation)
+06 exploratory data analysis        (data understanding)
+07 baseline data with autoML        (modelling)
+08 prepare data for modelling       (data preparation)
+09 filtered data with autoML        (modelling)
+10 EDA pre feature engineering      (data understanding)
+11 feature engineering              (data preparation)
+12 engineered data with autoML      (modelling)
+13 compare autoML models            (evaluation)
+14 pre-tuning exploration           (data understanding) 
+15 tuned logistic regression        (modelling)  
+16 tuned random forest              (modelling)
+17 tuned gradient boosted machines  (modelling)
+18 tuned XGBoost                    (modelling)
+19 compare all models               (evaluation)
+20 candidate model evaluation       (evaluation)
+21 further feature engineering      (data preparation)
+22 XG Boost                         (modelling)
