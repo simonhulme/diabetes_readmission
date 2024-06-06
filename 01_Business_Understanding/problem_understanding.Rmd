@@ -1,0 +1,212 @@
+---
+title: "Context - Problem Understanding"
+author: "Simon Hulme"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+diabetes_data <- read_rds("00_Data/processed/for_analysis/diabetes_for_analysis.rds")
+```
+
+# Determine Business Objectives
+
+## Background
+
+```{r}
+diabetes_data %>% 
+    count(readmitted) %>% 
+    mutate(percentage = round(n / sum(n), 3) * 100)
+```
+
+-   Patients with diabetes more likely to be readmitted early
+
+    -   known risk factors
+
+        -   socio-demographic, co-morbidities, insulin therapy, length
+            of stay, and previous admissions.
+
+-   In this sample 8.2% of patients with diabetes were readmitted within
+    30 days of discharge
+
+    -   lower rate than expected suggesting either data incomplete or
+        issues with existing evidence
+
+-   Early readmissions are costly
+
+    -   total NHS cost
+
+    -   cost per organisation
+
+    -   'cost' to patients - not necessarily financial
+
+## Business Objectives
+
+-   Reduce the costs associated with early readmission of patients with
+    diabetes
+
+-   Select appropriate intervention to reduce readmission
+
+    -   low cost applied to many patients
+
+    -   high cost targeted at high-risk patients
+
+## Business Success Criteria
+
+-   Minimise overall cost
+
+    -   overall cost = cost attributed to all early readmissions + cost
+        of intervention
+
+# Assess situation
+
+## Inventory of resources
+
+-   personnel: Me (Ex GP and Data Science Consultant)
+
+-   data: secondary care data from US 1999-2008 (UCI Machine Learning
+    Repository)
+
+-   computing: iMac
+
+-   software: R (packages: tidyverse, h2o, recipes)
+
+## Requirements, assumptions, and constraints
+
+-   requirements
+
+    -   schedule of completion,
+
+    -   comprehensibility
+
+    -   quality of results
+
+    -   security
+
+    -   legal issues
+
+-   assumptions
+
+    -   patients are adults discharged to community settings (excluding
+        hospices)
+
+        -   exclude patients discharged to other hospitals or hospital
+            departments
+
+        -   exclude patients who die
+
+        -   exclude patients discharged for end-of-life care
+
+    -   these may be assumptions about the data that can be verified
+        during data mining,
+
+    -   may also include non-verifiable assumptions about the business
+        related to the project.
+
+    -   It is particularly important to list the latter if it will
+        affect the validity of the results.
+
+-   constraints
+
+    -   availability of resources
+
+    -   technological constraints such as the size of dataset that it is
+        practical to use for modeling.
+
+Risks and contingencies
+
+-   risks or events that might delay the project or cause it to fail.
+
+-   corresponding contingency plans, what action will be taken if these
+    risks or events take place.
+
+## 
+
+Terminology
+
+-   relevant business terminology
+
+-   data mining terminology
+
+Costs and benefits
+
+-   compares the costs of the project with the potential benefits to the
+    business if it is successful.
+
+    -   be as specific as possible. For example, use monetary measures
+        in a commercial situation.
+
+# Determine data mining goals
+
+## Data mining goals
+
+-   predict which patients with diabetes admitted to hospital are at
+    increased risk of early hospital readmission
+
+-   understand drivers for readmission to aid development of an
+    appropriate intervention
+
+-   stratify risk using predicted probability
+
+## Data mining success criteria
+
+-   tbd
+
+-   *Define the criteria for a successful outcome to the project in
+    technical terms—for example, a certain level of predictive accuracy
+    or a propensity-to-purchase profile with a given degree of “lift.”
+    As with business success criteria, it may be necessary to describe
+    these in subjective terms, in which case the person or persons
+    making the subjective judgement should be identified.*
+
+# Produce project plan
+
+## Project plan
+
+-   tbd
+
+*Describe the intended plan for achieving the data mining goals and
+thereby achieving the business goals. The plan should specify the steps
+to be performed during the rest of the project, including the initial
+selection of tools and techniques.*
+
+*List the stages to be executed in the project, together with their
+duration, resources required, inputs, outputs, and dependencies. Where
+possible, make explicit the large-scale iterations in the data mining
+process—for example, repetitions of the modeling and evaluation phases.*
+
+*As part of the project plan, it is also important to analyze
+dependencies between time schedule and risks. Mark results of these
+analyses explicitly in the project plan, ideally with actions and
+recommendations if the risks are manifested. Note: the project plan
+contains detailed plans for each phase. Decide at this point which
+evaluation strategy will be used in the evaluation phase.*
+
+*The project plan is a dynamic document in the sense that at the end of
+each phase, a review of progress and achievements is necessary and a
+corresponding update of the project plan is recommended. Specific review
+points for these updates are part of the project plan.*
+
+## 
+
+Initial assessment of tools and techniques
+
+-   tbd
+
+*At the end of the first phase, an initial assessment of tools and
+techniques should be performed. Here, for example, you select a data
+mining tool that supports various methods for different stages of the
+process. It is important to assess tools and techniques early in the
+process since the selection of tools and techniques may influence the
+entire project.*
