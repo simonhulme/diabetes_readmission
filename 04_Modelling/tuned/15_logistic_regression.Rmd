@@ -1,0 +1,355 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# GLM - Logistic Regression
+
+-   run logistic regression +/- power transformations
+
+```{r message=FALSE}
+library(tidyverse)
+library(h2o)
+library(here)
+library(recipes)
+
+source("../../../../scripts/plot_probabilities_by_numeric_vals.R")
+
+h2o.init()
+h2o.removeAll()
+```
+
+## Baseline data
+
+```{r}
+train <- read_rds(here("00_Data/processed/for_analysis/diabetes_train.rds"))
+```
+
+```{r}
+h2o.removeAll()
+train_h2o <- as.h2o(train)
+```
+
+```{r}
+# set up h2o model
+
+## variables
+y   <- "readmitted"
+x   <- setdiff(names(train), y)
+
+## modelling template
+glm_template <- function(alpha) {
+    
+    h2o.glm(
+        x = x,
+        y = y,
+        training_frame = train_h2o,
+        seed = 1234,
+        nfolds = 10,
+        alpha = alpha,
+        lambda_search = TRUE,
+        balance_classes = TRUE
+    )
+}
+
+## Set tuning parameters ----
+glm_tuning_grid <- 
+    expand.grid(alpha  = c(0, 0.5, 0.99))
+```
+
+```{r}
+## Train models ----
+## no regularisation
+glm <-
+    h2o.glm(
+        x = x,
+        y = y,
+        training_frame = train_h2o,
+        seed = 1234,
+        nfolds = 10,
+        lambda = 0,
+        balance_classes = TRUE
+    )
+
+glm_models <- 
+    glm_tuning_grid %>% 
+    mutate(models = map(alpha, ~ glm_template(alpha = .x)))
+```
+
+```{r}
+## Evaluate models ----
+glm_performance <- 
+    glm_models %>% 
+    bind_rows(tibble(models = list(glm))) %>% 
+    mutate(auc        = map(models, ~ h2o.auc(.x, train = TRUE, xval = TRUE)),
+           predictors = map_int(models, ~ .x@model$model_summary$number_of_active_predictors)) %>% 
+    unnest_wider(c(auc), names_sep = "_") %>% 
+    arrange(desc(auc_xval)) %>% 
+    select(models, alpha, predictors, contains("train"), contains("xval"))
+
+glm_performance
+```
+
+```{r}
+selected_model <- 
+    glm_performance %>%
+        slice_max(auc_xval, n = 1) %>% 
+        pull(models) %>% 
+    pluck(1)
+
+h2o.saveModel(selected_model, 
+              path = here("04_Modelling/models/baseline_tuned_models/"),
+              filename = "baseline_tuned_GLM")
+```
+
+## Filtered data
+
+```{r}
+# clear data
+rm(list = ls())
+h2o.removeAll()
+```
+
+```{r}
+train <- read_rds(here("00_Data/processed/for_analysis/diabetes_filtered_train.rds"))
+```
+
+```{r}
+# set up h2o model
+train_h2o <- as.h2o(train)
+
+## variables
+y   <- "readmitted"
+x   <- setdiff(names(train), y)
+
+## modelling template
+glm_template <- function(alpha) {
+    
+    h2o.glm(
+        x = x,
+        y = y,
+        training_frame = train_h2o,
+        seed = 1234,
+        nfolds = 10,
+        balance_classes = TRUE,
+        alpha = alpha,
+        lambda_search = TRUE
+    )
+}
+
+## Set tuning parameters ----
+glm_tuning_grid <- 
+    expand.grid(alpha  = c(0, 0.5, 0.99))
+```
+
+```{r}
+glm <-
+    h2o.glm(
+        x = x,
+        y = y,
+        training_frame = train_h2o,
+        seed = 1234,
+        nfolds = 10,
+        lambda = 0,
+        balance_classes = TRUE
+    )
+
+glm_models <- 
+    glm_tuning_grid %>% 
+    mutate(models = map(alpha, ~ glm_template(.x)))
+```
+
+```{r}
+glm_performance <- 
+    glm_models %>% 
+    bind_rows(tibble(models = list(glm))) %>% 
+    mutate(auc        = map(models, ~ h2o.auc(.x, train = TRUE, xval = TRUE)),
+           predictors = map_int(models, ~ .x@model$model_summary$number_of_active_predictors)) %>% 
+    unnest_wider(c(auc), names_sep = "_") %>% 
+    arrange(desc(auc_xval)) %>% 
+    select(models, alpha, predictors, contains("train"), contains("xval"))
+
+glm_performance
+```
+
+```{r}
+selected_model <- 
+    glm_performance %>%
+        slice_max(auc_xval, n = 1) %>% 
+        pull(models) %>% 
+    pluck(1)
+
+h2o.saveModel(selected_model, 
+              path = here("04_Modelling/models/filtered_tuned_models/"),
+              filename = "filtered_tuned_GLM")
+```
+
+## Engineered data
+
+```{r}
+# clear data
+rm(list = ls())
+h2o.removeAll()
+```
+
+```{r}
+train <- read_rds(here("00_Data/processed/for_analysis/diabetes_engineered_filtered_train.rds"))
+```
+
+```{r}
+# set up h2o model
+train_h2o <- as.h2o(train)
+
+## variables
+y   <- "readmitted"
+x   <- setdiff(names(train), y)
+
+## modelling template
+glm_template <- function(alpha) {
+    
+    h2o.glm(
+        x = x,
+        y = y,
+        training_frame = train_h2o,
+        seed = 1234,
+        nfolds = 10,
+        alpha = alpha,
+        lambda_search = TRUE, 
+        balance_classes = TRUE
+    )
+}
+
+## Set tuning parameters ----
+glm_tuning_grid <- 
+    expand.grid(alpha  = c(0, 0.5, 0.99))
+```
+
+```{r}
+glm <-
+    h2o.glm(
+        x = x,
+        y = y,
+        training_frame = train_h2o,
+        seed = 1234,
+        nfolds = 10,
+        lambda = 0,
+        balance_classes = TRUE
+    )
+
+glm_models <- 
+    glm_tuning_grid %>% 
+    mutate(models = map(alpha, ~ glm_template(.x)))
+```
+
+```{r}
+glm_performance <- 
+    glm_models %>% 
+    bind_rows(tibble(models = list(glm))) %>% 
+    mutate(auc        = map(models, ~ h2o.auc(.x, train = TRUE, xval = TRUE)),
+           predictors = map_int(models, ~ .x@model$model_summary$number_of_active_predictors)) %>% 
+    unnest_wider(c(auc), names_sep = "_") %>% 
+    arrange(desc(auc_xval)) %>% 
+    select(models, alpha, predictors, contains("train"), contains("xval"))
+
+glm_performance
+```
+
+```{r}
+selected_model <- 
+    glm_performance %>%
+        slice_max(auc_xval, n = 1) %>% 
+        pull(models) %>% 
+    pluck(1)
+
+h2o.saveModel(selected_model, 
+              path = here("04_Modelling/models/engineered_tuned_models/"),
+              filename = "engineered_tuned_GLM")
+```
+
+## Further Feature Engineering
+
+```{r}
+recipe_obj <- 
+    train %>% 
+    recipe(formula = readmitted ~ .) %>% 
+    step_YeoJohnson(time_in_hospital, contains("num")) %>% 
+    step_poly(time_in_hospital, contains("num"),  degree = 3) %>% 
+    prep()
+
+train_2 <- 
+    bake(recipe_obj, train)
+```
+
+Repeat modelling
+
+```{r}
+# set up h2o model
+h2o.removeAll()
+
+train_h2o <- as.h2o(train_2)
+
+## variables
+y   <- "readmitted"
+x   <- setdiff(names(train_2), y)
+
+## modelling template
+glm_template <- function(alpha) {
+    
+    h2o.glm(
+        x = x,
+        y = y,
+        training_frame = train_h2o,
+        seed = 1234,
+        nfolds = 10,
+        alpha = alpha,
+        lambda_search = TRUE, 
+        balance_classes = TRUE
+    )
+}
+
+## Set tuning parameters ----
+glm_tuning_grid <- 
+    expand.grid(alpha  = c(0, 0.5, 0.99))
+```
+
+```{r}
+glm <-
+    h2o.glm(
+        x = x,
+        y = y,
+        training_frame = train_h2o,
+        seed = 1234,
+        nfolds = 10,
+        lambda = 0,
+        balance_classes = TRUE
+    )
+
+glm_models <- 
+    glm_tuning_grid %>% 
+    mutate(models = map(alpha, ~ glm_template(.x)))
+```
+
+```{r}
+glm_performance <- 
+    glm_models %>% 
+    bind_rows(tibble(models = list(glm))) %>% 
+    mutate(auc        = map(models, ~ h2o.auc(.x, train = TRUE, xval = TRUE)),
+           predictors = map_int(models, ~ .x@model$model_summary$number_of_active_predictors)) %>% 
+    unnest_wider(c(auc), names_sep = "_") %>% 
+    arrange(desc(auc_xval)) %>% 
+    select(models, alpha, predictors, contains("train"), contains("xval"))
+
+glm_performance
+```
+
+```{r}
+selected_model <- 
+    glm_performance %>%
+        slice_max(auc_xval, n = 1) %>% 
+        pull(models) %>% 
+    pluck(1)
+
+h2o.saveModel(selected_model, 
+              path = here("04_Modelling/models/engineered_tuned_models/"),
+              filename = "engineered_tuned_GLM_2")
+```

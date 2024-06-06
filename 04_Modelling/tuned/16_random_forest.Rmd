@@ -1,0 +1,817 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Random Forest Models
+
+## Set-Up
+
+```{r message=FALSE}
+# Libraries
+library(tidyverse)
+library(h2o)
+library(here)
+
+source("../../../../scripts/h2o.gridResults.R")
+```
+
+```{r message=FALSE, warning=FALSE}
+# H2O
+h2o.init()
+h2o.removeAll()
+```
+
+## Baseline data model
+
+-   no feature selection
+
+-   no feature engineering
+
+-   no hyper-parameter tuning
+
+-   use class balancing and stratified 10-fold cross-validation
+
+```{r}
+## Data
+baseline_train <- read_rds(here("00_Data/processed/for_analysis/diabetes_train.rds"))
+baseline_test  <- read_rds(here("00_Data/processed/for_analysis/diabetes_test.rds"))
+```
+
+```{r message=FALSE}
+# export to h2o cluster
+baseline_train_h2o <- as.h2o(baseline_train)
+baseline_test_h2o  <- as.h2o(baseline_test)
+```
+
+```{r}
+y <- "readmitted"
+x <- setdiff(names(baseline_train), y)
+
+default_rf <-
+    h2o.randomForest(
+        x = x,
+        y = y,
+        training_frame = baseline_train_h2o,
+        model_id = "default_rf",
+        balance_classes = TRUE,
+        nfolds = 10,
+        fold_assignment = "Stratified",
+        seed = 1234
+    )
+```
+
+```{r}
+h2o.auc(default_rf, train = TRUE, xval = TRUE)
+```
+
+Default model using baseline data appears to over-fit the training data resulting in poor performance using cross-validation.
+
+```{r}
+default_rf@model$model_summary
+```
+
+Default settings resulted in 50 trees all 20 nodes deep with mean of around 2190 leaves.
+
+## Tuned baseline data model
+
+### Random grid search
+
+```{r}
+hyper_params <- list(
+    max_depth = c(5, 10, 20, 30),
+    min_rows = c(1, 5, 10, 20),
+    sample_rate = seq(0.5, 1, 0.1),
+    col_sample_rate_per_tree = seq(0.5, 1, 0.1),
+    mtries = seq(3, 12, 1)
+)
+
+baseline_rf_grid <- h2o.grid(
+    algorithm = "randomForest",
+    grid_id = "baseline_rf_grid",
+    x = x,
+    y = y,
+    training_frame = baseline_train_h2o,
+    nfolds = 5,
+    fold_assignment = "Stratified",
+    balance_classes = TRUE,
+    seed = 1234,
+    hyper_params = hyper_params,
+    search_criteria = list(
+        strategy = "RandomDiscrete",
+        max_models = 25,
+        seed = 1234),
+    stopping_rounds = 5,
+    stopping_metric = "AUC",
+    stopping_tolerance = 0.001
+)
+
+RF_random_grid_1_summary <- h2o.gridResults("baseline_rf_grid", "auc", TRUE)
+
+RF_random_grid_1_summary
+
+RF_random_grid_1_summary %>% 
+    pivot_longer(cols = c(col_sample_rate_per_tree:sample_rate)) %>% 
+    ggplot(aes(value, auc, color = name)) +
+    geom_point() +
+    facet_wrap(~ name, scales = "free_x") +
+    theme_bw()
+```
+
+```{r}
+hyper_params <- list(
+    max_depth = seq(2, 9, 1),
+    min_rows = seq(5, 20, 5),
+    sample_rate = seq(0.7, 1, 0.1),
+    col_sample_rate_per_tree = seq(0.5, 0.9, 0.1),
+    mtries = seq(3, 9, 1)
+)
+
+baseline_rf_grid <- h2o.grid(
+    algorithm = "randomForest",
+    grid_id = "baseline_rf_grid",
+    x = x,
+    y = y,
+    training_frame = baseline_train_h2o,
+    nfolds = 5,
+    fold_assignment = "Stratified",
+    balance_classes = TRUE,
+    seed = 1234,
+    hyper_params = hyper_params,
+    search_criteria = list(
+        strategy = "RandomDiscrete",
+        max_models = 25,
+        seed = 1234),
+    stopping_rounds = 5,
+    stopping_metric = "AUC",
+    stopping_tolerance = 0.001
+)
+
+RF_random_grid_1_summary <- h2o.gridResults("baseline_rf_grid", "auc", TRUE)
+
+RF_random_grid_1_summary
+
+RF_random_grid_1_summary %>% 
+    pivot_longer(cols = c(col_sample_rate_per_tree:sample_rate)) %>% 
+    ggplot(aes(value, auc, color = name)) +
+    geom_point() +
+    facet_wrap(~ name, scales = "free_x") +
+    theme_bw()
+```
+
+Final iteration
+
+```{r}
+hyper_params <- list(
+    max_depth = seq(2, 5, 1),
+    min_rows = seq(5, 20, 5),
+    sample_rate = seq(0.7, 1, 0.1),
+    col_sample_rate_per_tree = seq(0.5, 0.9, 0.1),
+    mtries = seq(3, 5, 1)
+)
+
+baseline_rf_grid <- h2o.grid(
+    algorithm = "randomForest",
+    grid_id = "baseline_rf_grid",
+    x = x,
+    y = y,
+    training_frame = baseline_train_h2o,
+    nfolds = 5,
+    fold_assignment = "Stratified",
+    balance_classes = TRUE,
+    seed = 1234,
+    hyper_params = hyper_params,
+    search_criteria = list(
+        strategy = "RandomDiscrete",
+        max_models = 25,
+        seed = 1234),
+    stopping_rounds = 5,
+    stopping_metric = "AUC",
+    stopping_tolerance = 0.001
+)
+
+RF_random_grid_1_summary <- h2o.gridResults("baseline_rf_grid", "auc", TRUE)
+
+RF_random_grid_1_summary
+
+RF_random_grid_1_summary %>% 
+    pivot_longer(cols = c(col_sample_rate_per_tree:sample_rate)) %>% 
+    ggplot(aes(value, auc, color = name)) +
+    geom_point() +
+    facet_wrap(~ name, scales = "free_x") +
+    theme_bw()
+```
+
+### Exhaustive grid search
+
+```{r}
+hyper_params <- list(
+    max_depth = c(2, 3, 4),
+    min_rows = c(3, 4, 5, 6, 7),
+    sample_rate = 0.8,
+    col_sample_rate_per_tree = 0.8,
+    mtries = c(3, 4)
+)
+
+exhaustive_grid <- h2o.grid(
+    algorithm = "randomForest",
+    grid_id = "baseline_rf_exhaustive_grid",
+    x = x,
+    y = y,
+    training_frame = baseline_train_h2o,
+    nfolds = 5,
+    fold_assignment = "Stratified",
+    balance_classes = TRUE,
+    seed = 1234,
+    hyper_params = hyper_params,
+    stopping_rounds = 5,
+    stopping_metric = "AUC",
+    stopping_tolerance = 0.001
+)
+
+exhaustive_grid_summary <- h2o.gridResults("baseline_rf_exhaustive_grid", "auc", TRUE)
+
+exhaustive_grid_summary
+
+exhaustive_grid_summary %>% 
+    pivot_longer(cols = c(col_sample_rate_per_tree:sample_rate)) %>% 
+    ggplot(aes(value, auc, color = name)) +
+    geom_point() +
+    facet_wrap(~ name, scales = "free_x") +
+    theme_bw()
+```
+
+### Final search
+
+```{r}
+hyper_params <- list(
+    max_depth = c(2, 3),
+    min_rows = 5,
+    sample_rate = 0.8,
+    col_sample_rate_per_tree = seq(0.1, 0.9, 0.1),
+    mtries = c(3, 4, 5)
+)
+
+exhaustive_grid <- h2o.grid(
+    algorithm = "randomForest",
+    grid_id = "baseline_rf_exhaustive_grid",
+    x = x,
+    y = y,
+    training_frame = baseline_train_h2o,
+    nfolds = 5,
+    fold_assignment = "Stratified",
+    balance_classes = TRUE,
+    seed = 1234,
+    hyper_params = hyper_params,
+    stopping_rounds = 5,
+    stopping_metric = "AUC",
+    stopping_tolerance = 0.001
+)
+
+exhaustive_grid_summary <- h2o.gridResults("baseline_rf_exhaustive_grid", "auc", TRUE)
+
+exhaustive_grid_summary
+
+exhaustive_grid_summary %>% 
+    pivot_longer(cols = c(col_sample_rate_per_tree:sample_rate)) %>% 
+    ggplot(aes(value, auc, color = name)) +
+    geom_point() +
+    facet_wrap(~ name, scales = "free_x") +
+    theme_bw()
+```
+
+### Save best model
+
+```{r}
+baseline_tuned_rf <- 
+    exhaustive_grid_summary %>% 
+    slice_head(n = 1) %>%
+    pull(model_ids) %>% 
+    h2o.getModel()
+
+h2o.saveModel(baseline_tuned_rf, path = here("04_Modelling/models/baseline_tuned_models/"), filename = "baseline_tuned_DRF")
+```
+
+## Filtered data
+
+```{r}
+# tidy cluster and environment
+rm(list = ls())
+h2o.removeAll()
+
+h2o.gridResults <-
+    function(grid_id, sort_by, decreasing) {
+        results <-
+            h2o.getGrid(grid_id = grid_id,
+                        sort_by = sort_by,
+                        decreasing = decreasing)
+        results_tbl <- as_tibble(results@summary_table)
+        
+        return(results_tbl)
+    }
+```
+
+```{r}
+# load new data
+filtered_train <- read_rds(here("00_Data/processed/for_analysis/diabetes_filtered_train.rds"))
+filtered_test  <- read_rds(here("00_Data/processed/for_analysis/diabetes_filtered_test.rds"))
+```
+
+```{r}
+# export to h2o cluster
+filtered_train_h2o <- as.h2o(filtered_train, destination_frame = "train")
+
+y <- "readmitted"
+x <- setdiff(names(filtered_train), y)
+```
+
+### Random grid search
+
+```{r}
+hyper_params <- list(
+    max_depth = c(2, 5, 10, 20),
+    min_rows = c(1, 5, 10, 20),
+    sample_rate = seq(0.1, 1, 0.1),
+    col_sample_rate_per_tree = seq(0.1, 1, 0.1),
+    mtries = seq(2, 8, 1)
+)
+
+baseline_rf_grid <- h2o.grid(
+    algorithm = "randomForest",
+    grid_id = "baseline_rf_grid",
+    x = x,
+    y = y,
+    training_frame = filtered_train_h2o,
+    nfolds = 5,
+    fold_assignment = "Stratified",
+    balance_classes = TRUE,
+    seed = 1234,
+    hyper_params = hyper_params,
+    search_criteria = list(
+        strategy = "RandomDiscrete",
+        max_models = 25,
+        seed = 1234),
+    stopping_rounds = 5,
+    stopping_metric = "AUC",
+    stopping_tolerance = 0.001
+)
+
+RF_random_grid_1_summary <- h2o.gridResults("baseline_rf_grid", "auc", TRUE)
+
+RF_random_grid_1_summary %>% 
+    pivot_longer(cols = c(col_sample_rate_per_tree:sample_rate)) %>% 
+    ggplot(aes(value, auc, color = name)) +
+    geom_point() +
+    facet_wrap(~ name, scales = "free_x") +
+    theme_bw()
+```
+
+```{r}
+hyper_params <- list(
+    max_depth = c(2:8),
+    min_rows = c(2, 5, 10, 20),
+    sample_rate = seq(0.1, 0.9, 0.1),
+    col_sample_rate_per_tree = seq(0.1, 0.9, 0.1),
+    mtries = seq(2, 8, 1)
+)
+
+baseline_rf_grid <- h2o.grid(
+    algorithm = "randomForest",
+    grid_id = "baseline_rf_grid",
+    x = x,
+    y = y,
+    training_frame = filtered_train_h2o,
+    nfolds = 5,
+    fold_assignment = "Stratified",
+    balance_classes = TRUE,
+    seed = 1234,
+    hyper_params = hyper_params,
+    search_criteria = list(
+        strategy = "RandomDiscrete",
+        max_models = 25,
+        seed = 1234),
+    stopping_rounds = 5,
+    stopping_metric = "AUC",
+    stopping_tolerance = 0.001
+)
+
+RF_random_grid_1_summary <- h2o.gridResults("baseline_rf_grid", "auc", TRUE)
+
+RF_random_grid_1_summary %>% 
+    pivot_longer(cols = c(col_sample_rate_per_tree:sample_rate)) %>% 
+    ggplot(aes(value, auc, color = name)) +
+    geom_point() +
+    facet_wrap(~ name, scales = "free_x") +
+    theme_bw()
+```
+
+```{r}
+hyper_params <- list(
+    max_depth = c(3:5),
+    min_rows = seq(2, 20, 1),
+    sample_rate = seq(0.2, 0.9, 0.1),
+    col_sample_rate_per_tree = seq(0.3, 0.8, 0.1),
+    mtries = c(4:6)
+)
+
+baseline_rf_grid <- h2o.grid(
+    algorithm = "randomForest",
+    grid_id = "baseline_rf_grid",
+    x = x,
+    y = y,
+    training_frame = filtered_train_h2o,
+    nfolds = 5,
+    fold_assignment = "Stratified",
+    balance_classes = TRUE,
+    seed = 1234,
+    hyper_params = hyper_params,
+    search_criteria = list(
+        strategy = "RandomDiscrete",
+        max_models = 25,
+        seed = 1234),
+    stopping_rounds = 5,
+    stopping_metric = "AUC",
+    stopping_tolerance = 0.001
+)
+
+RF_random_grid_1_summary <- h2o.gridResults("baseline_rf_grid", "auc", TRUE)
+
+RF_random_grid_1_summary %>% 
+    pivot_longer(cols = c(col_sample_rate_per_tree:sample_rate)) %>% 
+    ggplot(aes(value, auc, color = name)) +
+    geom_point() +
+    facet_wrap(~ name, scales = "free_x") +
+    theme_bw()
+```
+
+### Exhaustive grid search
+
+```{r}
+h2o.removeAll(retained_elements = "train")
+
+hyper_params <- list(
+    max_depth = 3,
+    min_rows = c(2, 5, 10, 15, 20), 
+    sample_rate = c(0.5, 0.8),
+    col_sample_rate_per_tree = c(0.6, 0.8),
+    mtries = c(4, 5)
+)
+
+exhaustive_grid <- h2o.grid(
+    algorithm = "randomForest",
+    grid_id = "filtered_exhaustive_grid",
+    x = x,
+    y = y,
+    training_frame = filtered_train_h2o,
+    nfolds = 5,
+    fold_assignment = "Stratified",
+    balance_classes = TRUE,
+    seed = 1234,
+    hyper_params = hyper_params,
+    stopping_rounds = 5,
+    stopping_metric = "AUC",
+    stopping_tolerance = 0.001
+)
+
+exhaustive_grid_summary <- h2o.gridResults("filtered_exhaustive_grid", "auc", TRUE)
+
+exhaustive_grid_summary %>% 
+    pivot_longer(cols = c(col_sample_rate_per_tree:sample_rate)) %>% 
+    ggplot(aes(value, auc, color = name)) +
+    geom_point() +
+    facet_wrap(~ name, scales = "free_x") +
+    theme_bw()
+```
+
+### Save best model
+
+```{r}
+baseline_tuned_rf <- 
+    exhaustive_grid_summary %>% 
+    slice_head(n = 1) %>%
+    pull(model_ids) %>% 
+    h2o.getModel()
+
+h2o.saveModel(baseline_tuned_rf, path = here("04_Modelling/models/filtered_tuned_models/"), filename = "filtered_tuned_DRF")
+```
+
+## Engineered data
+
+```{r}
+# tidy cluster and environment
+rm(list = ls())
+h2o.removeAll()
+
+h2o.gridResults <-
+    function(grid_id, sort_by, decreasing) {
+        results <-
+            h2o.getGrid(grid_id = grid_id,
+                        sort_by = sort_by,
+                        decreasing = decreasing)
+        results_tbl <- as_tibble(results@summary_table)
+        
+        return(results_tbl)
+    }
+```
+
+```{r}
+# load new data
+train <- read_rds(here("00_Data/processed/for_analysis/diabetes_engineered_filtered_train.rds"))
+test <- read_rds(here("00_Data/processed/for_analysis/diabetes_engineered_filtered_test.rds"))
+```
+
+```{r}
+# export to h2o cluster
+train_h2o <- as.h2o(train, destination_frame = "train")
+test_h2o <- as.h2o(test, destination_frame = "test")
+
+
+
+y <- "readmitted"
+x <- setdiff(names(train), y)
+```
+
+### Random grid search
+
+```{r}
+hyper_params <- list(
+    max_depth = c(2, 5, 10, 20),
+    min_rows = c(1, 5, 10, 20),
+    mtries = seq(3, 10, 1)
+)
+
+random_rf_grid <- h2o.grid(
+    algorithm = "randomForest",
+    grid_id = "random_rf_grid",
+    x = x,
+    y = y,
+    training_frame = train_h2o,
+    nfolds = 5,
+    fold_assignment = "Stratified",
+    balance_classes = TRUE,
+    seed = 1234,
+    hyper_params = hyper_params,
+    search_criteria = list(
+        strategy = "RandomDiscrete",
+        max_models = 25,
+        seed = 1234),
+    stopping_rounds = 5,
+    stopping_metric = "AUC",
+    stopping_tolerance = 0.001
+)
+
+random_grid_summary <- h2o.gridResults("random_rf_grid", "auc", TRUE)
+
+random_grid_summary %>% 
+    pivot_longer(cols = c(max_depth:mtries)) %>% 
+    ggplot(aes(value, auc, color = name)) +
+    geom_point() +
+    facet_wrap(~ name, scales = "free_x") +
+    theme_bw()
+```
+
+```{r}
+hyper_params <- list(
+    max_depth = c(2:9),
+    min_rows = c(1, 5, 10, 20),
+    mtries = seq(4, 8, 1)
+)
+
+random_rf_grid <- h2o.grid(
+    algorithm = "randomForest",
+    grid_id = "random_rf_grid",
+    x = x,
+    y = y,
+    training_frame = train_h2o,
+    nfolds = 5,
+    fold_assignment = "Stratified",
+    balance_classes = TRUE,
+    seed = 1234,
+    hyper_params = hyper_params,
+    search_criteria = list(
+        strategy = "RandomDiscrete",
+        max_models = 25,
+        seed = 1234),
+    stopping_rounds = 5,
+    stopping_metric = "AUC",
+    stopping_tolerance = 0.001
+)
+
+random_grid_summary <- h2o.gridResults("random_rf_grid", "auc", TRUE)
+
+random_grid_summary %>% 
+    pivot_longer(cols = c(max_depth:mtries)) %>% 
+    ggplot(aes(value, auc, color = name)) +
+    geom_point() +
+    facet_wrap(~ name, scales = "free_x") +
+    theme_bw()
+```
+
+```{r}
+hyper_params <- list(
+    max_depth = c(2:5),
+    min_rows = seq(1, 10, 2),
+    sample_rate = c(0.5, 0.632, 0.95, 1),
+    col_sample_rate_per_tree = c(0.5, 0.75, 0.95, 1),
+    mtries = c(4:5)
+)
+
+random_rf_grid <- h2o.grid(
+    algorithm = "randomForest",
+    grid_id = "random_rf_grid",
+    x = x,
+    y = y,
+    training_frame = train_h2o,
+    nfolds = 5,
+    fold_assignment = "Stratified",
+    balance_classes = TRUE,
+    seed = 1234,
+    hyper_params = hyper_params,
+    search_criteria = list(
+        strategy = "RandomDiscrete",
+        max_models = 25,
+        seed = 1234),
+    stopping_rounds = 5,
+    stopping_metric = "AUC",
+    stopping_tolerance = 0.001
+)
+
+random_grid_summary <- h2o.gridResults("random_rf_grid", "auc", TRUE)
+
+random_grid_summary %>% 
+    pivot_longer(cols = c(col_sample_rate_per_tree:sample_rate)) %>% 
+    ggplot(aes(value, auc, color = name)) +
+    geom_point() +
+    facet_wrap(~ name, scales = "free_x") +
+    theme_bw()
+```
+
+### Exhaustive grid search
+
+```{r}
+h2o.removeAll(retained_elements = "train")
+
+hyper_params <- list(
+    max_depth = 3,
+    min_rows = 5, 
+    sample_rate = seq(0.1, 0.9, 0.2),
+    col_sample_rate_per_tree = seq(0.1, 0.9, 0.2),
+    mtries = 5
+)
+
+exhaustive_grid <- h2o.grid(
+    algorithm = "randomForest",
+    grid_id = "exhaustive_grid",
+    x = x,
+    y = y,
+    training_frame = train_h2o,
+    nfolds = 10,
+    fold_assignment = "Stratified",
+    balance_classes = TRUE,
+    seed = 1234,
+    hyper_params = hyper_params,
+    stopping_rounds = 5,
+    stopping_metric = "AUC",
+    stopping_tolerance = 0.001
+)
+
+exhaustive_grid_summary <- h2o.gridResults("exhaustive_grid", "auc", TRUE)
+
+exhaustive_grid_summary %>% 
+    pivot_longer(cols = c(col_sample_rate_per_tree, sample_rate)) %>% 
+    ggplot(aes(value, auc, color = name)) +
+    geom_point() +
+    facet_wrap(~ name, scales = "free_x") +
+    theme_bw()
+```
+
+Final Tuning
+
+```{r}
+hyper_params <- list(
+    max_depth = 3,
+    min_rows = c(2, 5, 8), 
+    sample_rate = seq(0.1, 0.9, 0.2),
+    col_sample_rate_per_tree = c(0.4, 0.5, 0.6),
+    mtries = 5
+)
+
+exhaustive_grid <- h2o.grid(
+    algorithm = "randomForest",
+    grid_id = "exhaustive_grid",
+    x = x,
+    y = y,
+    training_frame = train_h2o,
+    nfolds = 10,
+    fold_assignment = "Stratified",
+    balance_classes = TRUE,
+    seed = 1234,
+    hyper_params = hyper_params,
+    stopping_rounds = 5,
+    stopping_metric = "AUC",
+    stopping_tolerance = 0.001
+)
+
+exhaustive_grid_summary <- h2o.gridResults("exhaustive_grid", "auc", TRUE)
+
+exhaustive_grid_summary %>% 
+    pivot_longer(cols = c(col_sample_rate_per_tree, sample_rate, min_rows)) %>% 
+    ggplot(aes(value, auc, color = name)) +
+    geom_point() +
+    facet_wrap(~ name, scales = "free_x") +
+    theme_bw()
+```
+
+### Save best model
+
+```{r}
+engineered_tuned_rf <- 
+    exhaustive_grid_summary %>% 
+    slice_head(n = 1) %>%
+    pull(model_ids) %>% 
+    h2o.getModel()
+
+h2o.saveModel(engineered_tuned_rf, path = here("04_Modelling/models/engineered_tuned_models/"), filename = "engineered_tuned_DRF")
+```
+
+EVALUATION
+
+Take selected model and iterate across 10 random seeds using 10 fold cross validation
+
+```{r}
+model_1 <- h2o.getModel("exhaustive_grid_model_83")
+
+model_1@model$model_summary
+model_1@allparameters %>% 
+    as_tibble() %>% 
+    head(1)
+```
+
+```{r}
+model_1_seed_grid <-
+    h2o.grid(
+        algorithm = "randomForest",
+        x = x,
+        y = y,
+        training_frame = filtered_train_h2o,
+        grid_id = "model_1_seed_grid",
+        nfolds = 10,
+        balance_classes = TRUE,
+        fold_assignment = "Stratified",
+        ntrees = 43,
+        max_depth = 5,
+        min_rows = 8,
+        mtries = 5,
+        sample_rate = 0.4,
+        col_sample_rate_per_tree = 0.3,
+        hyper_params = list(seed = 1:10)
+    )
+
+model_1_seed_grid_summary <- 
+    h2o.getGrid("model_1_seed_grid", sort_by = "auc", decreasing = TRUE)
+    
+model_1_seed_grid_summary <- 
+    model_1_seed_grid_summary@summary_table %>% 
+    as_tibble() 
+
+model_1_seed_grid_summary # performance stable
+```
+
+```{r}
+final_RF_model_seed_grid_summary <- 
+    h2o.getGrid("final_RF_model_seed_grid", sort_by = "auc", decreasing = TRUE)
+    
+final_RF_model_seed_grid_summary <- 
+    final_RF_model_seed_grid_summary@summary_table %>% 
+    as_tibble() 
+
+final_RF_model_seed_grid_summary
+```
+
+evaluate on test data
+
+```{r}
+final_rf_model <- 
+    h2o.randomForest(
+        x = x,
+        y = y,
+        training_frame = filtered_train_h2o,
+        model_id = "final_rf_model",
+        nfolds = 10,
+        balance_classes = TRUE,
+        fold_assignment = "Stratified",
+        ntrees = 43,
+        max_depth = 5,
+        min_rows = 8,
+        mtries = 5,
+        sample_rate = 0.4,
+        col_sample_rate_per_tree = 0.3
+    )
+
+final_rf_model_perf_obj <- h2o.performance(engineered_tuned_rf, newdata = test_h2o)
+
+engineered_tuned_rf %>% h2o.auc(train = TRUE, xval = TRUE)
+final_rf_model_perf_obj %>% h2o.auc()
+
+engineered_tuned_rf %>% h2o.varimp_plot(num_of_features = 12)
+```
