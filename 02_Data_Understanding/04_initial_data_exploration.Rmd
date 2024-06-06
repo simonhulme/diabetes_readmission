@@ -1,0 +1,250 @@
+---
+title: "initial_data_exploration"
+author: "Simon Hulme"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE}
+library(tidyverse)
+library(skimr)
+```
+
+Use full prepared data prior to splitting into test and train sets
+
+```{r}
+diabetes_data <- read_rds("../00_Data/processed/diabetes_processed.rds")
+```
+
+This task addresses data mining questions using querying, visualization, and reporting techniques. These include distribution of key attributes (for example, the target attribute of a prediction task) relationships between pairs or small numbers of attributes, results of simple aggregations, properties of significant sub-populations, and simple statistical analyses.
+
+These analyses may directly address the data mining goals; they may also contribute to or refine the data description and quality reports, and feed into the transformation and other data preparation steps needed for further analysis.
+
+Describe results of this task, including first findings or initial hypothesis and their impact on the remainder of the project. If appropriate, include graphs and plots to indicate data characteristics that suggest further examination of interesting data subsets.
+
+## Overall
+
+### Variables
+
+```{r}
+names(diabetes_data)
+```
+
+### Uniqueness
+
+```{r}
+# recheck uniqueness of observations
+str_glue("There are {sum(duplicated(diabetes_data$patient_nbr))} duplicate patients")
+```
+
+## Outcome
+
+```{r}
+# explore outcome
+diabetes_data %>% 
+    count(readmitted) %>% 
+    mutate(percentage = round(proportions(n) * 100, 2))
+```
+
+-   significant class imbalance exists which may impact predictive models
+
+    -   'accuracy paradox'
+
+    -   bias towards majority class
+
+    -   insufficient learning of minority class
+
+    -   inappropriate decision threshold
+
+-   options:
+
+    -   use alternative metrics than accuracy: e.g. precision, recall, and F1-score
+
+    -   use of ensemble methods such as boosted trees
+
+    -   over/under-sampling
+
+    -   adjust decision threshold
+
+## Numeric predictors
+
+### Descriptive statistics
+
+```{r}
+skim(select(diabetes_data,where(is.numeric))) %>% 
+    select(-c(numeric.p25, numeric.p75))
+```
+
+-   encounter_id and patient_nbr are id variables so drop
+
+### Visualisation
+
+```{r}
+diabetes_data %>% 
+    select(where(is.numeric), -c(encounter_id, patient_nbr)) %>%
+    pivot_longer(everything()) %>% 
+    ggplot(aes(value)) +
+    geom_histogram(fill = "lightblue", color = "grey30", bins = 20) +
+    facet_wrap(~ name, scales = "free") +
+    theme_bw() +
+    ggtitle("Distribution of numeric data")
+```
+
+-   varying degrees of positively skewed values across numeric features
+
+## Categorical predictors
+
+### Descriptive statistics
+
+```{r}
+diabetes_data %>% 
+    select(where(is.factor)) %>% 
+    skim() %>% 
+    arrange(desc(n_missing))
+```
+
+-   nearly all weight missing so drop feature
+
+-   handle other missing data in modelling phase
+
+    -   race, gender, payer code, medical speciality, diagnosis 1,2,3.
+
+    -   options: drop feature, omit observation, impute value, encode "missing" as a category.
+
+### Visualisation
+
+```{r}
+bar_plot <- function(data, variable, levels = NULL, ordered = "Yes", flip = "No") {
+    
+    if (is_null(levels)) {
+        plot_data <- data
+    } else {
+        plot_data <- data %>% 
+           mutate({{variable}} := fct_lump_n({{variable}}, n = levels))
+    }
+    
+    if (ordered == "Yes") {
+        plot_data <-
+            plot_data %>%
+            mutate({{variable}} := fct_infreq({{variable}}))
+        }
+   
+    if (flip == "Yes") { 
+        
+        plot_data <- 
+            plot_data %>% 
+            mutate({{variable}} := fct_rev({{variable}}))
+    }
+    
+    p <- 
+        plot_data %>% 
+        ggplot(aes({{variable}})) +
+        geom_bar(fill = "lightblue", colour = "grey30") +
+        theme_bw()
+    
+    if (flip == "Yes") p + coord_flip()
+    
+    else p
+}
+```
+
+```{r}
+bar_plot(diabetes_data, race) + 
+    ggtitle("Caucasian most frequent, Asian least")
+```
+
+```{r}
+bar_plot(diabetes_data, gender) +
+    ggtitle("Females slightly more frequent than males")
+```
+
+```{r}
+diabetes_data %>% 
+    bar_plot(age, ordered = "No") +
+    ggtitle("40 to 90 year olds appear most frequent")
+```
+
+```{r}
+diabetes_data %>% 
+    bar_plot(payer_code) +
+    ggtitle("MC most frequent non-missing value")
+```
+
+```{r}
+diabetes_data %>% 
+    bar_plot(medical_specialty, flip = "Yes") +
+    ggtitle("High cardinality with missing data ++")
+
+diabetes_data %>% 
+    drop_na(medical_specialty) %>% 
+    bar_plot(medical_specialty, levels = 25, flip = "Yes") +
+    ggtitle("Top 25 recorded medical specialties")
+```
+
+```{r}
+diabetes_data %>% 
+    bar_plot(admission_source, flip = "Yes") +
+    ggtitle("ER & Physician Referral most frequent")
+```
+
+```{r}
+diabetes_data %>% 
+    bar_plot(admission_type, flip = "No") +
+    ggtitle("Emergency most freqent followed by elective and urgent")
+```
+
+```{r}
+diabetes_data %>% 
+    bar_plot(discharge_disposition, flip = "Yes")
+```
+
+```{r}
+diabetes_data %>%
+    group_by(diag_1_major, diag_1_chapter) %>% 
+    count(name = "number") %>% 
+    ungroup() %>% 
+    slice_max(number, n = 25) %>% 
+    mutate(diag_1_major = fct_reorder(diag_1_major, number)) %>%
+    ggplot(aes(diag_1_major, number, fill = diag_1_chapter)) +
+    geom_col() +
+    coord_flip() +
+    theme_bw() +
+    theme(legend.position = "bottom") +
+    scale_fill_brewer(type = "qual", palette = 3)
+```
+
+```{r}
+diabetes_data %>%
+    drop_na(diag_2_major, diag_2_chapter) %>% 
+    group_by(diag_2_major, diag_2_chapter) %>% 
+    count(name = "number") %>% 
+    ungroup() %>% 
+    slice_max(number, n = 25) %>% 
+    mutate(diag_2_major = fct_reorder(diag_2_major, number)) %>%
+    ggplot(aes(diag_2_major, number, fill = diag_2_chapter)) +
+    geom_col() +
+    coord_flip() +
+    theme_bw() +
+    theme(legend.position = "bottom") +
+    scale_fill_brewer(type = "qual", palette = 3)
+```
+
+```{r}
+diabetes_data %>%
+    drop_na(diag_3_major, diag_3_chapter) %>% 
+    group_by(diag_3_major, diag_3_chapter) %>% 
+    count(name = "number") %>% 
+    ungroup() %>% 
+    slice_max(number, n = 25) %>% 
+    mutate(diag_3_major = fct_reorder(diag_3_major, number)) %>%
+    ggplot(aes(diag_3_major, number, fill = diag_3_chapter)) +
+    geom_col() +
+    coord_flip() +
+    theme_bw() +
+    theme(legend.position = "bottom") +
+    scale_fill_brewer(type = "qual", palette = 3)
+```

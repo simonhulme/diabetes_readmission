@@ -1,0 +1,155 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# Pre-tuning exploration of engineered data
+
+```{r message=FALSE}
+library(tidyverse) 
+library(recipes)
+library(here)
+library(h2o)
+
+train <- read_rds(here("00_Data/processed/for_analysis/diabetes_engineered_filtered_train.rds"))
+```
+
+## Explore distribution of numeric variables
+
+```{r}
+# descriptive stats
+train %>% 
+    select(where(is.numeric)) %>% 
+    skimr::skim()
+```
+
+-   positively skewed variables except metformin and insulin which are
+    binary
+
+```{r}
+# visualisation
+train %>%
+    select(where(is.numeric), -c(insulin, metformin)) %>%
+    pivot_longer(cols = everything()) %>%
+    ggplot(aes(value)) +
+    geom_histogram(bins = 20,
+                   fill = "steelblue",
+                   color = "grey30") + facet_wrap( ~ name, scales = "free") + 
+    theme_bw()
+```
+
+-   num_lab_procedures, num medications, time_in_hospital moderate
+    positive skew
+
+-   number emergency, inpatient and outpatient severely positively
+    skewed
+
+### Transformation
+
+-   use Yeo-Johnson due to zero values
+
+```{r}
+recipe_obj <- train %>% 
+    recipe(readmitted ~ .) %>% 
+    step_YeoJohnson(time_in_hospital, starts_with("num")) %>% 
+    prep()
+
+train_transformed <- bake(recipe_obj, new_data = train)
+```
+
+```{r}
+# re-visualise
+train_transformed %>% 
+    select(where(is.numeric), - c(insulin, metformin)) %>% 
+    pivot_longer(cols = everything()) %>% 
+    ggplot(aes(value)) + 
+    geom_histogram(bins = 20, fill = "steelblue", color = "grey30") + 
+    facet_wrap(~name, scales = "free") + 
+    theme_bw()
+```
+
+-   consider transform num_lab_procedures, num_medications, and time in
+    hospital and leave others un-transformed
+
+```{r}
+recipe_obj <- train %>% 
+    recipe(readmitted ~ .) %>% 
+    step_YeoJohnson(num_lab_procedures, num_medications, time_in_hospital) %>% 
+    prep()
+
+train_transformed <- bake(recipe_obj, new_data = train)
+```
+
+```{r}
+# test using glm with and without transformed numeric values
+baseline_glm <- 
+    glm(readmitted ~ ., family = "binomial", data = train)
+
+transfomed_glm <- 
+    glm(readmitted ~ ., family = "binomial", data = train_transformed)
+
+broom::glance(baseline_glm)$AIC
+broom::glance(transfomed_glm)$AIC
+```
+
+-   slight improvement in model AIC using transformed numeric variables
+
+-   re-visit during modelling using h2o
+
+## Explore missing medical speciality
+
+```{r}
+train %>% 
+    count(medical_specialty) %>% 
+    mutate(percent = round(100 * proportions(n), 2)) %>% 
+    arrange(desc(n))
+```
+
+-   convert unknown back into NA
+
+-   attempt to impute medical specialty using other features
+
+```{r}
+train_with_na <- 
+    train %>% 
+    mutate(medical_specialty = as.character(medical_specialty) %>% na_if("Unknown") %>% as_factor)
+```
+
+-   imputation vars : demographics, admission_source, admission_type,
+    diagnoses
+
+```{r}
+imputation_rec <-
+    recipe(readmitted ~ ., data = train_with_na) %>%
+    step_impute_knn(
+        medical_specialty,
+        impute_with = imp_vars(diag_1_major, admission_type, admission_source))
+
+prepped_rec <- prep(imputation_rec)
+
+train_imputed <- 
+    bake(prepped_rec, new_data = train_with_na)
+
+tibble(
+    old = train_with_na$medical_specialty,
+    new = train_imputed$medical_specialty) %>% 
+    pivot_longer(everything()) %>% 
+    mutate(name = fct_rev(name)) %>% 
+    ggplot(aes(value)) +
+    geom_bar() +
+    facet_wrap(~ name) +
+    coord_flip() +
+    theme_bw()
+```
+
+Rerun models
+
+```{r}
+imputed_glm <- 
+    glm(readmitted ~ ., family = "binomial", data = train_imputed)
+
+broom::glance(imputed_glm)$AIC
+```

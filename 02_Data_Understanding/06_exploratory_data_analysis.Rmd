@@ -1,0 +1,1505 @@
+---
+title: "Exploratory Data Visualisation"
+output: html_notebook
+---
+
+Explore training data prior to pre-processing and modelling
+
+# Set Up
+
+```{r message=FALSE}
+library(tidyverse)
+library(tidymodels)
+# library(FactoMineR)
+library(finalfit)
+library(h2o)
+```
+
+```{r}
+h2o.init()
+```
+
+```{r}
+diabetes_train <- read_rds("../00_Data/processed/for_analysis/diabetes_train.rds")
+```
+
+```{r}
+source("../../../scripts/plot_probabilities_by_numeric_vals.R")
+source("../../../scripts/model_sparce_predictor.R")
+source("../../../scripts/plot_proportions_by_level.R")
+source("../../../scripts/plot_residuals_vs_predictor.R")
+source("../../../scripts/assess_missing_data_dependence.R")
+```
+
+# Summary Statistics
+
+```{r}
+ff_glimpse(diabetes_train)
+```
+
+# Exploring Missingness
+
+```{r}
+variables_with_missing <- map_lgl(diabetes_train, ~ any(is.na(.x)))
+
+diabetes_train[variables_with_missing] %>% 
+    select(-contains("chapter")) %>% 
+    arrange(medical_specialty) %>% 
+    missing_plot()
+```
+
+-   no evident association between medical specialty and other missing features
+
+```{r}
+dependent <- "readmitted"
+
+explanatory <- 
+    diabetes_train[variables_with_missing] %>% 
+    select(- contains("chapter")) %>% 
+    names()
+    
+diabetes_train %>% missing_pattern(dependent, explanatory, ) 
+```
+
+```{r}
+diabetes_train %>% 
+    assess_missing_data_dependence(medical_specialty, admission_source)
+
+diabetes_train %>% 
+    assess_missing_data_dependence(medical_specialty, admission_type)
+
+diabetes_train %>% 
+    assess_missing_data_dependence(medical_specialty, discharge_disposition)
+
+diabetes_train %>% 
+    assess_missing_data_dependence(race, admission_source)
+```
+
+-   missing data for race, medical specialty not MAR
+
+    -   potential issues for imputation
+        -   consider use of machine learning method such as knn or bagging
+            -   more complex situation and require tuning and evaluation using cross validation
+    -   simplest approaches are to:
+        -   create new level for missing data - "Unknown"
+        -   drop rows with NA if infrequent
+        -   drop features with large amount missing data
+            -   sensitivity analysis e.g. with medical_specialty
+
+# Visualising Univariate Relationships
+
+## CATEGORICAL
+
+### Race
+
+```{r}
+chisq.test(table(diabetes_train$race, diabetes_train$readmitted))
+
+plot_proportions_by_level(
+    data = diabetes_train,
+    predictor = race,
+    response = readmitted,
+    success = "Yes",
+    ordered = FALSE
+)
+```
+
+#### NOT ASSOCIATED
+
+-   no significant difference in early readmission rate by race
+
+### Gender
+
+```{r}
+chisq.test(table(diabetes_train$gender, diabetes_train$readmitted))
+
+plot_proportions_by_level(
+    data = diabetes_train, 
+    predictor = gender,
+    response = readmitted,
+    success = "Yes"
+)
+```
+
+#### NOT ASSOCIATED
+
+-   no significant difference in early readmission rate by gender alone
+-   explore interactions with other features - if none then reject
+
+### Age
+
+```{r}
+chisq.test(table(diabetes_train$age, diabetes_train$readmitted))
+
+plot_proportions_by_level(
+    data = diabetes_train,
+    predictor = age,
+    response = readmitted,
+    success = "Yes", 
+    ordered = FALSE
+)
+```
+
+#### ASSOCIATED
+
+-   proportion readmitted early higher with increasing age.
+
+### Maximum serum glucose
+
+```{r}
+chisq.test(table(diabetes_train$max_glu_serum, diabetes_train$readmitted))
+
+plot_proportions_by_level(
+    data = diabetes_train,
+    predictor = max_glu_serum,
+    response = readmitted,
+    success = "Yes"
+)
+```
+
+#### ASSOCIATED
+
+-   proportion readmitted dependent on max serum glucose
+
+### A1C result
+
+```{r}
+chisq.test(table(diabetes_train$a1cresult, diabetes_train$readmitted))
+
+plot_proportions_by_level(
+    data = diabetes_train,
+    predictor = a1cresult,
+    response = readmitted,
+    success = "Yes" 
+)
+```
+
+#### NOT ASSOCIATED
+
+-   readmission rate not dependent on A1C result:
+-   potential interaction with treatment related features
+
+### Change in treatment
+
+```{r}
+chisq.test(table(diabetes_train$change, diabetes_train$readmitted))
+
+plot_proportions_by_level(
+    data = diabetes_train,
+    predictor = change,
+    response = readmitted,
+    success = "Yes"
+)
+```
+
+#### NOT ASSOCIATED
+
+-   early readmission not dependent on change in treatment
+
+### Diabetes medication
+
+```{r}
+chisq.test(table(diabetes_train$diabetes_med, diabetes_train$readmitted))
+
+plot_proportions_by_level(
+    data = diabetes_train,
+    predictor = diabetes_med,
+    response = readmitted,
+    success = "Yes"
+)
+```
+
+#### ASSOCIATED
+
+-   early readmission dependent on diabetes medication
+
+### Medical speciality
+
+```{r}
+chisq.test(table(diabetes_train$medical_specialty, diabetes_train$readmitted))
+
+diabetes_train %>% 
+    plot_proportions_by_level(
+        predictor = medical_specialty,
+        response = readmitted,
+        success = "Yes", 
+        flip = TRUE
+)
+```
+
+-   high cardinality and sparse data - explore alternative encoding
+
+```{r}
+medical_specialty <-
+    model_sparse_predictor(data = diabetes_train,
+                           predictor = medical_specialty,
+                           response = readmitted,
+                           props = seq(0, 0.003, 0.0005))
+
+medical_specialty %>% 
+    ggplot(aes(proportion, auc_xval)) +
+    geom_line() +
+    geom_point(aes(color = sd_cv), size = 4) +
+    geom_text(aes(label = num_levels), vjust = -0.5, hjust = -0.5) +
+    theme_bw() +
+    scale_x_continuous(breaks = seq(0, 0.003, 0.0005)) +
+    ggtitle("med_specialty optimum threshold = 0.0005")
+```
+
+```{r}
+medical_specialty %>% 
+    filter(proportion == 0.0005) %>% 
+    pull(data) %>% 
+    pluck(1) %>%
+    as_tibble() %>% 
+    plot_proportions_by_level(
+        predictor = medical_specialty,
+        response = readmitted,
+        success = "Yes",
+        flip = TRUE
+    )
+```
+
+#### ASSOCIATED
+
+-   reduce cardinality by lumping: threshold = 0.0005
+
+-   frequently 'unknown' but proportion readmitted has very narrow CI ? keep as level rather than imputing values
+
+### Admission source
+
+```{r}
+chisq.test(table(diabetes_train$admission_source, diabetes_train$readmitted))
+
+plot_proportions_by_level(
+    data = diabetes_train,
+    predictor = admission_source,
+    response = readmitted,
+    success = "Yes", 
+    flip = TRUE
+)
+```
+
+-   sparse data - explore alternative encoding
+-   explore difference between NULL, Not Available, Not Mapped
+
+```{r}
+admission_source <-
+    model_sparse_predictor(data = diabetes_train,
+                           predictor = admission_source,
+                           response = readmitted,
+                           props = seq(0, 0.05, 0.0025))
+
+admission_source %>% 
+    ggplot(aes(proportion, auc_xval)) +
+    geom_line() +
+    geom_point(aes(color = sd_cv), size = 4) +
+    geom_text(aes(label = num_levels), vjust = -0.5, hjust = -0.5) +
+    theme_bw()  +
+    scale_x_continuous(breaks = seq(0, 0.05, 0.005)) +
+    ggtitle("admission_source optimum threshold = 0.0015")
+```
+
+```{r}
+admission_source %>% 
+    filter(proportion == 0.015) %>% 
+    pull(data) %>% 
+    pluck(1) %>%
+    as_tibble() %>% 
+    plot_proportions_by_level(
+        predictor = admission_source,
+        response = readmitted,
+        success = "Yes",
+        flip = TRUE
+    )
+```
+
+#### ASSOCIATED
+
+-   reduce cardinality by lumping: threshold = 0.015
+
+### Admission type
+
+```{r}
+chisq.test(table(diabetes_train$admission_type, diabetes_train$readmitted))
+
+plot_proportions_by_level(
+    data = diabetes_train,
+    predictor = admission_type,
+    response = readmitted,
+    success = "Yes", 
+    flip = TRUE
+)
+```
+
+```{r}
+admission_type <-
+    model_sparse_predictor(data = diabetes_train,
+                           predictor = admission_type,
+                           response = readmitted,
+                           props = seq(0, 0.1, 0.01))
+
+admission_type %>% 
+    ggplot(aes(proportion, auc_xval)) +
+    geom_line() +
+    geom_point(aes(color = sd_cv), size = 4) +
+    geom_text(aes(label = num_levels), vjust = -0.5, hjust = -0.5) +
+    theme_bw()  +
+    scale_x_continuous(breaks = seq(0, 0.1, 0.01)) +
+    ggtitle("admission_type optimum threshold = 0.06")
+```
+
+```{r}
+admission_type %>% 
+    filter(proportion == 0.06) %>% 
+    pull(data) %>% 
+    pluck(1) %>%
+    as_tibble() %>% 
+    plot_proportions_by_level(
+        predictor = admission_type,
+        response = readmitted,
+        success = "Yes",
+        flip = TRUE
+    )
+```
+
+#### ASSOCIATED
+
+-   reduce cardinality by lumping: threshold = 0.06
+
+### Discharge disposition
+
+```{r}
+chisq.test(table(diabetes_train$discharge_disposition, diabetes_train$readmitted), correct = TRUE)
+
+plot_proportions_by_level(
+    data = diabetes_train,
+    predictor = discharge_disposition,
+    response = readmitted,
+    success = "Yes", 
+    flip = TRUE
+)
+```
+
+#### ASSOCIATED
+
+### Individual drugs
+
+```{r}
+diabetes_meds <- 
+    diabetes_train %>% 
+    select(metformin:metformin_pioglitazone)
+
+med_names <- names(diabetes_meds)
+
+results <- 
+    map(med_names, ~ table(diabetes_meds[[.x]], diabetes_train[['readmitted']])) %>% 
+    set_names(med_names) %>% 
+    map(~ chisq.test(.x)) 
+
+enframe(results)%>% 
+    mutate(results = map(value, ~ .x %>% broom::tidy())) %>% 
+    unnest(results) %>% 
+    filter(parameter > 1) %>% 
+    select(name, p.value) %>% 
+    arrange(p.value) %>% 
+    mutate(p.value = round(p.value, 3))
+```
+
+Explore individual drugs where p \<0.05
+
+```{r}
+plot_proportions_by_level(
+    data = diabetes_train,
+    predictor = insulin,
+    response = readmitted,
+    success = "Yes"
+)
+
+plot_proportions_by_level(
+    data = diabetes_train,
+    predictor = metformin,
+    response = readmitted,
+    success = "Yes"
+)
+
+plot_proportions_by_level(
+    data = diabetes_train,
+    predictor = repaglinide,
+    response = readmitted,
+    success = "Yes"
+)
+
+plot_proportions_by_level(
+    data = diabetes_train,
+    predictor = glipizide,
+    response = readmitted,
+    success = "Yes"
+)
+```
+
+Transform selected drugs to binary variables
+
+```{r}
+diabetes_train %>%
+    select(readmitted, metformin) %>%
+    mutate(metformin = if_else(metformin == "No", "No", "Yes")) %>%
+    plot_proportions_by_level(predictor = metformin,
+                              response = readmitted,
+                              success = "Yes")
+    
+diabetes_train %>%
+    select(readmitted, insulin) %>%
+    mutate(insulin = if_else(insulin == "No", "No", "Yes")) %>%
+    plot_proportions_by_level(predictor = insulin,
+                              response = readmitted,
+                              success = "Yes")
+
+diabetes_train %>%
+    select(readmitted, repaglinide) %>%
+    mutate(repaglinide = if_else(repaglinide == "No", "No", "Yes")) %>%
+    plot_proportions_by_level(predictor = repaglinide,
+                              response = readmitted,
+                              success = "Yes")
+
+diabetes_train %>%
+    select(readmitted, glipizide) %>%
+    mutate(glipizide = if_else(glipizide == "No", "No", "Yes")) %>%
+    plot_proportions_by_level(predictor = glipizide,
+                              response = readmitted,
+                              success = "Yes")
+```
+
+#### ASSOCIATED
+
+-   insulin, metformin, repaglinide, and glipizide
+
+    -   transform each to binary
+
+### Diagnosis 1
+
+```{r}
+diag_1_major <-
+    model_sparse_predictor(data = diabetes_train,
+                           predictor = diag_1_major,
+                           response = readmitted,
+                           props = seq(0, 0.01, 0.0005))
+
+diag_1_major %>% 
+    ggplot(aes(proportion, auc_xval)) +
+    geom_line() +
+    geom_point(aes(color = sd_cv), size = 4) +
+    geom_text(aes(label = num_levels), vjust = -0.5, hjust = -0.5) +
+    theme_bw() +
+    scale_x_continuous(breaks = seq(0, 0.01, 0.001)) +
+    ggtitle("diag_1_major optimum threshold = 0.0025")
+```
+
+```{r}
+diag_1_major %>% 
+    filter(proportion == 0.0025) %>% 
+    pull(data) %>% 
+    pluck(1) %>%
+    as_tibble() %>% 
+    plot_proportions_by_level(
+        predictor = diag_1_major,
+        response = readmitted,
+        success = "Yes",
+        flip = TRUE
+    ) 
+```
+
+#### ASSOCIATED
+
+-   reduce cardinality by lumping: threshold = 0.0025
+
+```{r}
+diabetes_train %>% 
+    drop_na(diag_1_chapter) %>% 
+    plot_proportions_by_level(diag_1_chapter, readmitted, success = "Yes", flip = TRUE)
+```
+
+### Diagnosis 2
+
+```{r}
+diag_2_major <-
+    model_sparse_predictor(data = diabetes_train,
+                           predictor = diag_2_major,
+                           response = readmitted,
+                           props = seq(0, 0.005, 0.0005))
+
+diag_2_major %>% 
+    ggplot(aes(proportion, auc_xval)) +
+    geom_line() +
+    geom_point(aes(color = sd_cv), size = 4) +
+    geom_text(aes(label = num_levels), vjust = -0.5, hjust = -0.5) +
+    theme_bw() +
+    scale_x_continuous(breaks = seq(0, 0.005, 0.0005)) +
+    ggtitle("diag_2_major optimum threshold = 0.0025")
+```
+
+```{r}
+diag_2_major %>% 
+    filter(proportion == 0.0025) %>% 
+    pull(data) %>% 
+    pluck(1) %>%
+    as_tibble() %>% 
+    plot_proportions_by_level(
+        predictor = diag_2_major,
+        response = readmitted,
+        success = "Yes",
+        flip = TRUE
+    ) 
+```
+
+```{r}
+diabetes_train %>% 
+    drop_na(diag_2_chapter) %>% 
+    plot_proportions_by_level(diag_2_chapter, readmitted, success = "Yes", flip = TRUE)
+```
+
+#### ASSOCIATED
+
+-   reduce cardinality by lumping: threshold = 0.0025
+
+### Diagnosis 3
+
+```{r}
+diag_3_major <-
+    model_sparse_predictor(data = diabetes_train,
+                           predictor = diag_3_major,
+                           response = readmitted,
+                           props = seq(0, 0.005, 0.0005))
+
+diag_3_major %>% 
+    ggplot(aes(proportion, auc_xval)) +
+    geom_line() +
+    geom_point(aes(color = sd_cv), size = 4) +
+    geom_text(aes(label = num_levels), vjust = -0.5, hjust = -0.5) +
+    theme_bw() +
+    scale_x_continuous(breaks = seq(0, 0.005, 0.0005)) +
+    ggtitle("diag_3_major optimum threshold = 0.002")
+```
+
+```{r}
+diag_3_major %>% 
+    filter(proportion == 0.002) %>% 
+    pull(data) %>% 
+    pluck(1) %>%
+    as_tibble() %>% 
+    plot_proportions_by_level(
+        predictor = diag_3_major,
+        response = readmitted,
+        success = "Yes",
+        flip = TRUE
+    ) 
+```
+
+```{r}
+diabetes_train %>% 
+    drop_na(diag_3_chapter) %>% 
+    plot_proportions_by_level(diag_3_chapter, readmitted, success = "Yes", flip = TRUE)
+```
+
+#### ASSOCIATED
+
+-   reduce cardinality by lumping: threshold = 0.002
+
+## NUMERIC
+
+### Time in hospital
+
+```{r}
+diabetes_train %>%
+    ggplot() +
+    geom_histogram(
+        aes(x = time_in_hospital, y = after_stat(density)),
+        fill = "steelblue",
+        colour = "black",
+        binwidth = 1
+    ) +
+    stat_function(fun = dnorm, args = list(
+        mean = mean(diabetes_train$time_in_hospital),
+        sd = sd(diabetes_train$time_in_hospital)
+    )) +
+    theme_bw()
+
+plot_probabilities_by_numeric_vals(
+    diabetes_train,
+    predictor = time_in_hospital,
+    response = readmitted,
+    success = "Yes"
+) 
+```
+
+```{r}
+basic_rec <- 
+    recipe(readmitted ~ time_in_hospital, data = diabetes_train) 
+
+basic_wflow <- workflow() %>% 
+    add_model(logistic_reg()) %>% 
+    add_recipe(basic_rec)
+
+basic_fit <- fit(basic_wflow, diabetes_train)   
+
+basic_results <- diabetes_train %>% 
+    select(readmitted) %>% 
+    bind_cols(predict(basic_fit, diabetes_train, type = "class")) %>% 
+    bind_cols(predict(basic_fit, diabetes_train, type = "prob")) 
+
+diabetes_train %>% 
+    plot_residuals_vs_predictor(basic_results, time_in_hospital,readmitted) +
+    ggtitle("Pattern in residuals suggests non-linear relationship")
+```
+
+Transform data due to skewness and non linearity
+
+```{r}
+diabetes_train %>%
+    mutate(time_in_hospital = log(time_in_hospital)) %>% 
+    ggplot() +
+    geom_histogram(
+        aes(x = time_in_hospital, y = after_stat(density)),
+        fill = "steelblue",
+        colour = "black",
+        bins = 20
+    ) +
+    theme_bw() +
+    ggtitle("Log transformed values more normally distributed")
+
+diabetes_train %>%
+    mutate(time_in_hospital = log(time_in_hospital)) %>%
+    plot_probabilities_by_numeric_vals(
+        predictor = time_in_hospital,
+        response = readmitted,
+        success = "Yes"
+    ) +
+    ggtitle("Non linearity persists despite log transformation of predictor")
+```
+
+Expand feature space to model non-linearity
+
+```{r}
+polynomial_rec <- 
+    recipe(readmitted ~ time_in_hospital, data = diabetes_train) %>% 
+    step_poly(time_in_hospital, degree = 2)
+
+polynomial_wflow <- workflow() %>%
+    add_model(logistic_reg()) %>%
+    add_recipe(polynomial_rec)
+
+polynomial_fit <- fit(polynomial_wflow, diabetes_train)   
+
+polynomial_results <- diabetes_train %>% 
+    select(readmitted, time_in_hospital) %>% 
+    bind_cols(predict(polynomial_fit, diabetes_train, type = "class")) %>% 
+    bind_cols(predict(polynomial_fit, diabetes_train, type = "prob")) 
+
+polynomial_results %>% 
+    ggplot(aes(time_in_hospital, .pred_Yes)) +
+    geom_point() +
+    geom_line() +
+    theme_bw()
+
+diabetes_train %>%
+    plot_residuals_vs_predictor(select(polynomial_results, -time_in_hospital),
+                                time_in_hospital,
+                                readmitted) +
+    ggtitle("2nd degree polynomial appears to fit training data better")
+```
+
+#### ASSOCIATED
+
+-   consider adding polynomial term to model non-linear pattern
+
+### Number of lab procedures
+
+```{r}
+summary(diabetes_train$num_lab_procedures)
+
+diabetes_train %>% 
+    ggplot() + 
+    geom_histogram(
+        aes(x = num_lab_procedures, y= after_stat(density)), 
+        fill="steelblue", colour="black", bins = 15) +
+    stat_function(fun = dnorm, args = list(mean = mean(diabetes_train$num_lab_procedures), sd = sd(diabetes_train$num_lab_procedures))) +
+    theme_bw()
+
+plot_probabilities_by_numeric_vals(
+    diabetes_train,
+    predictor = num_lab_procedures,
+    response = readmitted,
+    success = "Yes",
+    points = FALSE
+)
+```
+
+```{r}
+basic_rec <- 
+    recipe(readmitted ~ num_lab_procedures, data = diabetes_train) 
+
+basic_wflow <- workflow() %>% 
+    add_model(logistic_reg()) %>% 
+    add_recipe(basic_rec)
+
+basic_fit <- fit(basic_wflow, diabetes_train)   
+
+basic_results <- diabetes_train %>% 
+    select(readmitted) %>% 
+    bind_cols(predict(basic_fit, diabetes_train, type = "class")) %>% 
+    bind_cols(predict(basic_fit, diabetes_train, type = "prob")) 
+
+diabetes_train %>% 
+    plot_residuals_vs_predictor(basic_results, num_lab_procedures, readmitted) +
+    ggtitle("No pattern in residuals suggest linear relationship")
+```
+
+#### ASSOCIATED
+
+-   approximately normal distribution - hint of positive skew with significant spike at one
+
+-   approximately linear relationship
+
+-   potential correlation with time in hospital
+
+### Number of procedures
+
+```{r}
+summary(diabetes_train$num_procedures)
+
+diabetes_train %>% 
+    ggplot() + 
+    geom_histogram(
+        aes(x = num_procedures, y= after_stat(density)), fill="steelblue", colour="black", binwidth = 1) +
+    stat_function(fun = dnorm, args = list(mean = mean(diabetes_train$num_procedures), sd = sd(diabetes_train$num_procedures))) +
+    theme_bw()
+
+plot_probabilities_by_numeric_vals(
+    diabetes_train,
+    predictor = num_procedures,
+    response = readmitted,
+    k = n_distinct(diabetes_train$num_procedures),
+    success = "Yes"
+)
+```
+
+#### NOT ASSOCIATED
+
+-   no association with outcome
+-   potential correlation with time in hospital
+
+### Number of medications
+
+```{r}
+diabetes_train %>% 
+    ggplot() + 
+    geom_histogram(
+        aes(x = num_medications, y=after_stat(density)), fill="steelblue", colour="black", binwidth = 1) +
+    stat_function(fun = dnorm, args = list(mean = mean(diabetes_train$num_medications), sd = sd(diabetes_train$num_medications))) +
+    theme_bw()
+
+diabetes_train %>% 
+    plot_probabilities_by_numeric_vals(
+        predictor = num_medications, response = readmitted, success = "Yes", points = FALSE
+)
+```
+
+```{r}
+basic_rec <- 
+    recipe(readmitted ~ num_medications, data = diabetes_train) 
+
+basic_wflow <- workflow() %>% 
+    add_model(logistic_reg()) %>% 
+    add_recipe(basic_rec)
+
+basic_fit <- fit(basic_wflow, diabetes_train)   
+
+basic_results <- diabetes_train %>% 
+    select(readmitted) %>% 
+    bind_cols(predict(basic_fit, diabetes_train, type = "class")) %>% 
+    bind_cols(predict(basic_fit, diabetes_train, type = "prob")) 
+
+diabetes_train %>%
+    plot_residuals_vs_predictor(basic_results, num_medications, readmitted) +
+    ggtitle("Pattern in residuals suggests non-linear relationship")
+```
+
+Transform data due to skewness and non linearity
+
+```{r}
+diabetes_train %>%
+    mutate(num_medications = log(num_medications)) %>% 
+    ggplot() +
+    geom_histogram(
+        aes(x = num_medications, y = after_stat(density)),
+        fill = "steelblue",
+        colour = "black",
+        bins = 20
+    ) +
+    theme_bw() +
+    ggtitle("Log transformed values more normally distributed")
+
+diabetes_train %>%
+    mutate(num_medications = log(num_medications)) %>%
+    plot_probabilities_by_numeric_vals(
+        predictor = num_medications,
+        response = readmitted,
+        success = "Yes"
+    ) +
+    ggtitle("Non linearity persists despite log transformation of predictor")
+```
+
+Expand feature space to model non-linearity using spline
+
+```{r}
+spline_rec <- 
+    recipe(readmitted ~ num_medications, data = diabetes_train) %>% 
+    step_spline_natural(num_medications, deg_free = 3)
+
+spline_wflow <- workflow() %>%
+    add_model(logistic_reg()) %>%
+    add_recipe(spline_rec)
+
+spline_fit <- fit(spline_wflow, diabetes_train)   
+
+spline_results <- diabetes_train %>% 
+    select(readmitted, num_medications) %>% 
+    bind_cols(predict(spline_fit, diabetes_train, type = "class")) %>% 
+    bind_cols(predict(spline_fit, diabetes_train, type = "prob")) 
+
+spline_results %>% 
+    ggplot(aes(num_medications, .pred_Yes)) +
+    geom_point() +
+    geom_line() +
+    theme_bw()
+
+diabetes_train %>%
+    plot_residuals_vs_predictor(select(spline_results, -num_medications),
+                                num_medications,
+                                readmitted) +
+    ggtitle("Spline with 3 dof appears to fit training data better")
+```
+
+#### ASSOCIATED
+
+-   consider adding spline basis terms to model non-linear pattern
+
+### Number of outpatient appointments
+
+```{r}
+diabetes_train %>% 
+    ggplot() + 
+    geom_histogram(
+        aes(x = number_outpatient, y= after_stat(density)), fill="steelblue", colour="black", binwidth = 1) +
+    stat_function(fun = dnorm, args = list(mean = mean(diabetes_train$number_outpatient), sd = sd(diabetes_train$number_outpatient))) +
+    theme_bw()
+
+diabetes_train %>% 
+    plot_probabilities_by_numeric_vals(
+        predictor = number_outpatient,
+        response = readmitted,
+        success = "Yes",
+        points = TRUE
+)
+
+basic_rec <- 
+    recipe(readmitted ~ number_outpatient, data = diabetes_train) 
+
+basic_wflow <- workflow() %>% 
+    add_model(logistic_reg()) %>% 
+    add_recipe(basic_rec)
+
+basic_fit <- fit(basic_wflow, diabetes_train)   
+
+basic_results <- diabetes_train %>% 
+    select(readmitted) %>% 
+    bind_cols(predict(basic_fit, diabetes_train, type = "class")) %>% 
+    bind_cols(predict(basic_fit, diabetes_train, type = "prob")) 
+
+diabetes_train %>%
+    plot_residuals_vs_predictor(basic_results, number_outpatient, readmitted)
+```
+
+Transform data due to skewness and non linearity
+
+```{r}
+diabetes_train %>%
+    mutate(number_outpatient = log(number_outpatient + 0.001)) %>%
+    plot_probabilities_by_numeric_vals(
+        predictor = number_outpatient,
+        response = readmitted,
+        success = "Yes"
+    ) +
+    ggtitle("Log transformation of predictor results in linear relationship")
+
+log_rec <- 
+    recipe(readmitted ~ number_outpatient, data = diabetes_train) %>% 
+    step_log(number_outpatient, offset = 0.001) %>%
+    step_spline_b(number_outpatient, deg_free = 3)
+
+log_wflow <- workflow() %>% 
+    add_model(logistic_reg()) %>% 
+    add_recipe(log_rec)
+
+log_fit <- fit(log_wflow, diabetes_train)   
+
+log_results <- diabetes_train %>% 
+    select(readmitted, number_outpatient) %>% 
+    bind_cols(predict(log_fit, diabetes_train, type = "class")) %>% 
+    bind_cols(predict(log_fit, diabetes_train, type = "prob")) 
+
+log_results %>% 
+    ggplot(aes(log(number_outpatient), .pred_Yes)) +
+    geom_point() +
+    geom_line() +
+    theme_bw()
+
+diabetes_train %>%
+    plot_residuals_vs_predictor(select(log_results, -number_outpatient), number_outpatient, readmitted)
+```
+
+Complex and therefore less interpretable - consider binary variable or discretisation
+
+```{r}
+# explore potential to convert to binary variable prev_outpatient True/False
+diabetes_train %>% 
+    mutate(previous_outpatient = if_else(number_outpatient >= 1, "Yes", "No")) %>% 
+    select(previous_outpatient, readmitted) %>% 
+    table() %>% 
+    chisq.test()  
+
+```
+
+#### ASSOCIATED
+
+-   Log transformation and spline transformation approximate relationship between number_outpatient and early readmission
+
+-   Binary variable or discretisation are also possibilities
+
+### Number emergency admissions
+
+```{r}
+diabetes_train %>% 
+    ggplot() + 
+    geom_histogram(
+        aes(x = number_emergency, y= after_stat(density)), fill="steelblue", colour="black", binwidth = 1) +
+    stat_function(fun = dnorm, args = list(mean = mean(diabetes_train$number_emergency), sd = sd(diabetes_train$number_emergency))) +
+    theme_bw()
+
+diabetes_train %>% 
+    plot_probabilities_by_numeric_vals(
+        predictor = number_emergency,
+        response = readmitted,
+        success = "Yes",
+        points = TRUE
+)
+
+basic_rec <- 
+    recipe(readmitted ~ number_emergency, data = diabetes_train) 
+
+basic_wflow <- workflow() %>% 
+    add_model(logistic_reg()) %>% 
+    add_recipe(basic_rec)
+
+basic_fit <- fit(basic_wflow, diabetes_train)   
+
+basic_results <- diabetes_train %>% 
+    select(readmitted) %>% 
+    bind_cols(predict(basic_fit, diabetes_train, type = "class")) %>% 
+    bind_cols(predict(basic_fit, diabetes_train, type = "prob")) 
+
+diabetes_train %>%
+    plot_residuals_vs_predictor(basic_results, number_emergency, readmitted)
+```
+
+Transform data due to skewness and non linearity
+
+```{r}
+diabetes_train %>%
+    mutate(number_emergency = log(number_emergency + 0.001)) %>%
+    plot_probabilities_by_numeric_vals(
+        predictor = number_emergency,
+        response = readmitted,
+        success = "Yes"
+    ) +
+    ggtitle("Relationship remains non-linear after log transformation")
+
+poly_rec <- 
+    recipe(readmitted ~ number_emergency, data = diabetes_train) %>% 
+    step_poly(number_emergency, degree = 3)
+
+poly_wflow <- workflow() %>% 
+    add_model(logistic_reg()) %>% 
+    add_recipe(poly_rec)
+
+poly_fit <- fit(poly_wflow, diabetes_train)   
+
+poly_results <- diabetes_train %>% 
+    select(readmitted, number_emergency) %>% 
+    bind_cols(predict(poly_fit, diabetes_train, type = "class")) %>% 
+    bind_cols(predict(poly_fit, diabetes_train, type = "prob")) 
+
+poly_results %>% 
+    ggplot(aes(number_emergency, .pred_Yes)) +
+    geom_point() +
+    geom_line() +
+    theme_bw()
+
+diabetes_train %>%
+    plot_residuals_vs_predictor(select(poly_results, -number_emergency), number_emergency, readmitted)
+```
+
+#### ASSOCIATED
+
+-   between 0 and 10 emergency admissions the probability of early readmissions although starts to plateau
+
+    -   very wide CIs suggest small numbers for extreme values of predictors
+
+-   3rd degree polynomial approximates training data
+
+### Number of inpatient episodes
+
+```{r}
+diabetes_train %>% 
+    ggplot() + 
+    geom_histogram(
+        aes(x = number_inpatient, y= after_stat(density)), fill="steelblue", colour="black", binwidth = 1) +
+    stat_function(fun = dnorm, args = list(mean = mean(diabetes_train$number_inpatient), sd = sd(diabetes_train$number_inpatient))) +
+    theme_bw()
+
+diabetes_train %>% 
+    plot_probabilities_by_numeric_vals(
+        predictor = number_inpatient,
+        response = readmitted,
+        success = "Yes",
+        points = TRUE
+)  +
+    scale_x_continuous(breaks = seq(0, 12, 1))
+
+basic_rec <- 
+    recipe(readmitted ~ number_inpatient, data = diabetes_train) 
+
+basic_wflow <- workflow() %>% 
+    add_model(logistic_reg()) %>% 
+    add_recipe(basic_rec)
+
+basic_fit <- fit(basic_wflow, diabetes_train)   
+
+basic_results <- diabetes_train %>% 
+    select(readmitted) %>% 
+    bind_cols(predict(basic_fit, diabetes_train, type = "class")) %>% 
+    bind_cols(predict(basic_fit, diabetes_train, type = "prob")) 
+
+diabetes_train %>%
+    plot_residuals_vs_predictor(basic_results, number_inpatient, readmitted) +
+    scale_x_continuous(breaks = seq(0, 12, 1))
+
+```
+
+Log transform
+
+```{r}
+spline_rec <- 
+    recipe(readmitted ~ number_inpatient, data = diabetes_train) %>% 
+    step_spline_b(number_inpatient, deg_free = 3)
+
+spline_wflow <- workflow() %>% 
+    add_model(logistic_reg()) %>% 
+    add_recipe(spline_rec)
+
+spline_fit <- fit(spline_wflow, diabetes_train)   
+
+spline_results <- diabetes_train %>% 
+    select(readmitted, number_inpatient) %>% 
+    bind_cols(predict(spline_fit, diabetes_train, type = "class")) %>% 
+    bind_cols(predict(spline_fit, diabetes_train, type = "prob")) 
+
+spline_results %>% 
+    ggplot(aes(number_inpatient, .pred_Yes)) +
+    geom_point() +
+    geom_line() +
+    theme_bw()
+
+diabetes_train %>%
+    plot_residuals_vs_predictor(select(spline_results, -number_inpatient), number_inpatient, readmitted)
+```
+
+#### ASSOCIATED
+
+-   strong linear predictor although wide confidence intervals and non linear residuals suggests instability at higher predictor values
+-   consider modelling this non linearity using splines
+
+### Number of diagnoses
+
+```{r}
+diabetes_train %>% 
+    ggplot() + 
+    geom_histogram(
+        aes(x = number_diagnoses, y= after_stat(density)), fill="steelblue", colour="black", binwidth = 1) +
+    stat_function(fun = dnorm, args = list(mean = mean(diabetes_train$number_diagnoses), sd = sd(diabetes_train$number_diagnoses))) +
+    theme_bw()
+
+plot_probabilities_by_numeric_vals(
+    diabetes_train,
+    predictor = number_diagnoses,
+    response = readmitted,
+    success = "Yes"
+)
+
+basic_rec <- 
+    recipe(readmitted ~ number_diagnoses, data = diabetes_train) 
+
+basic_wflow <- workflow() %>% 
+    add_model(logistic_reg()) %>% 
+    add_recipe(basic_rec)
+
+basic_fit <- fit(basic_wflow, diabetes_train)   
+
+basic_results <- diabetes_train %>% 
+    select(readmitted) %>% 
+    bind_cols(predict(basic_fit, diabetes_train, type = "class")) %>% 
+    bind_cols(predict(basic_fit, diabetes_train, type = "prob")) 
+
+diabetes_train %>%
+    plot_residuals_vs_predictor(basic_results, number_diagnoses, readmitted)
+```
+
+#### ASSOCIATED
+
+-   strong linear relationsip
+
+## Explore relationship between predictors
+
+CONVERT COUNTS INTO RATES
+
+EXPLORE INTERACTIONS
+
+A1c Result and Change in treatment
+
+Length of stay vs. number of ....
+
+#### Features dependent on time in hospital
+
+-   Number lab procedures, procedures, medications, diagnoses
+
+```{r}
+cor(diabetes_train$num_lab_procedures, diabetes_train$time_in_hospital)
+# moderate positive correlation
+
+plot(diabetes_train$time_in_hospital, diabetes_train$num_lab_procedures)
+
+diabetes_train %>% 
+    select(readmitted, num_lab_procedures, time_in_hospital) %>% 
+    mutate(rate_per_day = num_lab_procedures / time_in_hospital) %>% 
+    ggplot(aes(rate_per_day)) +
+    geom_histogram(fill = 'steelblue', colour = "black") +
+    theme_bw()
+
+diabetes_train %>%
+    select(readmitted, num_lab_procedures, time_in_hospital) %>%
+    mutate(rate_per_day = num_lab_procedures / time_in_hospital) %>%
+    plot_probabilities_by_numeric_vals(
+        predictor = rate_per_day,
+        response = readmitted,
+        success = "Yes", points = FALSE
+    )
+```
+
+-   bimodal distribution of original variable transformed into positively skewed Gaussian distribution when converted into rate per day
+
+    -   may benefit from power transformation
+
+-   more complex non-linear relationship evident
+
+```{r}
+cor(diabetes_train$num_procedures, diabetes_train$time_in_hospital)
+# weak positive correlation
+
+diabetes_train %>% 
+    select(readmitted, num_procedures, time_in_hospital) %>% 
+    mutate(rate_per_day = num_procedures / time_in_hospital) %>% 
+    ggplot(aes(rate_per_day)) +
+    geom_histogram(fill = 'steelblue', colour = "black") +
+    theme_bw()
+
+diabetes_train %>%
+    select(readmitted, num_procedures, time_in_hospital) %>%
+    mutate(rate_per_day = num_procedures / time_in_hospital) %>%
+    plot_probabilities_by_numeric_vals(
+        predictor = rate_per_day,
+        response = readmitted,
+        success = "Yes", points = FALSE
+    )
+```
+
+-   could use either total number procedures or rate
+
+    -   I would err on using simpler non transformed total value
+
+```{r}
+cor(diabetes_train$num_medications, diabetes_train$time_in_hospital)
+# moderate positive correlation
+
+diabetes_train %>% 
+    select(readmitted, num_medications, time_in_hospital) %>% 
+    mutate(rate_per_day = num_medications / time_in_hospital) %>% 
+    ggplot(aes(rate_per_day)) +
+    geom_histogram(fill = 'steelblue', colour = "black") +
+    theme_bw()
+
+diabetes_train %>%
+    select(readmitted, num_medications, time_in_hospital) %>%
+    mutate(rate_per_day = num_medications / time_in_hospital)%>%
+    plot_probabilities_by_numeric_vals(
+        predictor = rate_per_day,
+        response = readmitted,
+        success = "Yes", points = FALSE
+    )
+```
+
+-   appear to be monotonic, approximately linear relationship with increased errors at high values of x due to skewed data
+
+```{r}
+cor(diabetes_train$number_diagnoses, diabetes_train$time_in_hospital)
+# weak positive correlation
+
+diabetes_train %>% 
+    select(readmitted, number_diagnoses, time_in_hospital) %>% 
+    mutate(rate_per_day = number_diagnoses / time_in_hospital) %>% 
+    ggplot(aes(rate_per_day)) +
+    geom_histogram(fill = 'steelblue', colour = "black") +
+    theme_bw()
+
+diabetes_train %>%
+    select(readmitted, number_diagnoses, time_in_hospital) %>%
+    mutate(rate_per_day = number_diagnoses / time_in_hospital)%>%
+    plot_probabilities_by_numeric_vals(
+        predictor = rate_per_day,
+        response = readmitted,
+        success = "Yes", points = FALSE
+    )
+```
+
+-   transforming into rate creates a more appropriate distribution for linear model
+
+-   increasing diagnoses per day associated with lower readmission rate
+
+    -   appears to be non linear - potentially reciprocal
+
+```{r}
+
+```
+
+#### Demographic features
+
+-   Race, Gender, Age
+
+```{r}
+# age vs. race
+plot_categorical_relationship(diabetes_train, age, race)
+plot_correspondence_analysis(diabetes_train, age, race)
+```
+
+-   increased age shown earlier to be associated with risk of readmission
+
+    -   is this influenced by gender or race (neither of which are associated with risk of readmission)
+
+```{r}
+diabetes_train %>% 
+    select(readmitted, race, age) %>% 
+    group_by(age) %>% 
+    group_split() %>% 
+    set_names(levels(diabetes_train$age)) %>% 
+    map(~ table(.x$readmitted, .x$race)) %>% 
+    map(chisq.test) %>% 
+    map(broom::tidy) %>% 
+    list_rbind(names_to = "age")
+```
+
+-   chi squared test indicates that readmitted is independent of race across all age groups
+
+```{r}
+# age vs. gender
+plot_categorical_relationship(diabetes_train, age, gender) 
+
+# plot_correspondence_analysis(diabetes_train, age, gender)
+```
+
+```{r}
+diabetes_train %>% 
+    select(readmitted, gender, age) %>% 
+    group_by(age) %>% 
+    group_split() %>% 
+    set_names(levels(diabetes_train$age)) %>% 
+    map(~ table(.x$readmitted, .x$gender)) %>% 
+    map(chisq.test) %>% 
+    map(broom::tidy) %>% 
+    list_rbind(names_to = "age")
+```
+
+-   same for gender
+
+-   suggests that reasonable to drop gender and race in a simplified model whilst retaining age.
+
+#### Glycaemic control and change of treatment
+
+```{r}
+diabetes_train %>% 
+    select(readmitted, A1Cresult, change) %>%
+    group_by(A1Cresult) %>% 
+    group_split() %>% 
+    set_names(levels(diabetes_train$A1Cresult)) %>% 
+    map(~ table(.x$readmitted, .x$change)) %>% 
+    map(chisq.test) %>% 
+    map(broom::tidy) %>% 
+    list_rbind(names_to = "A1Cresult")
+
+# visualise those with no A1Cresult comparing readmission rates between those with treatment changed and those without
+
+diabetes_train %>% 
+    filter(A1Cresult == "None") %>% 
+    ggplot(aes(readmitted)) +
+    geom_bar(aes(fill = change), position = "fill") +
+    labs(title = "Patients with no A1C result recorded during admission",
+         subtitle = "In this group, readmissions slightly higher in those with change in treatment despite no result") +
+    theme_bw()
+
+diabetes_train %>% 
+    filter(A1Cresult == "None") %>% 
+    select(readmitted, change) %>% 
+    prop_test(readmitted ~ change, order = c("Ch", "No"))
+```
+
+-   interaction between A1c and change although only for one level of A1c results and actual difference in rates very small although statistically significant
+
+#### Numeric
+
+```{r}
+diabetes_train %>% 
+    select(where(is.numeric), -c(encounter_id, patient_nbr)) %>% 
+    cor() %>% 
+    corrplot::corrplot(order = "FPC")
+```
+
+```{r message=FALSE}
+diabetes_train %>% 
+    select(where(is.numeric), -c(encounter_id, patient_nbr)) %>% 
+    slice_sample(prop = 0.2) %>% 
+    ggpairs(diag  = list(continuous = "barDiag"),
+            lower = list(continuous = wrap(ggally_smooth, size = 0.5, alpha = 0.05)))
+
+```
+
+-   there is moderate correlation between the features relating to time_in_hospital and num\_\*.
+
+-   these may be an opportunity for dimensionality reduction or derivation of new features that adjust for time\_\_in_hospital
+
+#### Categorical
+
+```{r}
+categorical_data <-
+    diabetes_train %>%
+    select(
+        where(is.factor),
+        -c(
+            readmitted, 
+            metformin:citoglipton,
+            `glyburide-metformin`:`metformin-pioglitazone`
+        )
+    )
+```
+
+Chi squared between pairs and then explore potential dependence with mosaic plots
+
+```{r warning=FALSE}
+
+pairs_categorical_var <- combn(names(categorical_data), m = 2, simplify = FALSE)
+
+df <- tibble(
+    pairs = map(pairs_categorical_var, pluck)
+    ) %>% 
+    mutate(cross_tabs = map(pairs, ~ select(categorical_data, all_of(.x)) %>% table()),
+           chi_sq_result = map(cross_tabs, chisq.test),
+           p_value = map_dbl(chi_sq_result, ~ .x$p.value)) %>% 
+    unnest_wider(pairs, names_sep = "_") %>% 
+    filter(p_value < 0.05) %>% 
+    arrange(p_value) %>% 
+    select(starts_with("p"))
+
+df
+```
+
+```{r}
+plot_categorical_relationship <- function(data, var1, var2) {
+    
+    data %>% 
+        group_by({{ var1 }}, {{ var2}}) %>% 
+        count() %>% 
+        ungroup() %>% 
+        mutate({{ var2}} := fct_reorder({{ var2}}, n)) %>% 
+        ggplot(aes({{ var1 }}, n, fill = {{ var2 }})) +
+        geom_col(position = 'fill') +
+        theme_bw()
+}
+```
+
+```{r}
+plot_correspondence_analysis <- function(data, var1, var2) {
+    
+    data %>% 
+        select({{ var1 }}, {{ var2 }}) %>% 
+        table() %>% 
+        CA(graph = FALSE) %>% 
+        plot()
+}
+```
+
+```{r}
+# age vs. race
+plot_categorical_relationship(diabetes_train, age, race)
+plot_correspondence_analysis(diabetes_train, age, race)
+```
+
+-   highest proportion of caucasians in youngest (0-10) and oldest (70-100) patients
+
+-   proportion of african american and hispanic patients highest in 20-40 year olds
+
+-   highest proportion Asian patients in youngest group (0-10)
+
+```{r}
+# age vs. A1C result
+plot_categorical_relationship(diabetes_train, age, A1Cresult)
+plot_correspondence_analysis(diabetes_train, age, A1Cresult)
+```
+
+-   youngest patients more likely to have high HbA1c
+
+-   oldest patients least likely to have HbA1c measured - almost linear increase with increasing age
+
+```{r}
+# age vs. diag_1
+plot_categorical_relationship(diabetes_train, age, diag_1)
+plot_correspondence_analysis(diabetes_train, age, diag_1)
+```
+
+-   youngest patients admissions mostly for diabetes
+
+-   as age increases admissions mainly due to other co-morbdities especially circulatory
+
+```{r}
+# age vs. diag_2
+plot_categorical_relationship(diabetes_train, age, diag_2)
+plot_correspondence_analysis(diabetes_train, age, diag_2)
+
+# age vs. diag_3
+plot_categorical_relationship(diabetes_train, age, diag_3)
+plot_correspondence_analysis(diabetes_train, age, diag_3)
+```
+
+-   all these confirm that different age groups present with different primary and secondary diagnosis
+
+-   this may impact on early readmission rates - i.e. may be a confounder for the effect of age on readmission
+
+```{r}
+h2o.shutdown()
+```

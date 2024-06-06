@@ -1,0 +1,220 @@
+---
+title: "Initial Data Collection Report"
+author: "Simon Hulme"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE}
+library(tidyverse)
+library(skimr)
+library(here)
+```
+
+```{r message=FALSE}
+# load raw data
+diabetic_data     <- read_csv(here("00_Data/raw/diabetic_data.csv"))
+IDS_mapping       <- read_csv(here("00_Data/raw/IDS_mapping.csv"))
+icd_9_definitions <- read_csv(here("00_Data/raw/icd_9_definitions.csv"))
+```
+
+# Data Collection
+
+Diabetes admissions data was contained in zip file contained in an on-line machine learning repository. I produced custom functions to download this zip file, extract its contents into temporary location, and then import these into R. Two files were imported and saved as raw data. The first dataset consisted of the main data around hospital admissions of patients with diabetes. The second contained labels for some of the categorical features that were encoded numerically in the main data.
+
+ICD9 codes by disease and chapter were obtained using a package in R called icd.data and saved as raw data.
+
+# Data Description
+
+```{r}
+str(diabetic_data)
+str(IDS_mapping)
+str(icd_9_definitions)
+```
+
+'diabetic_data' is a csv file containing 101766 observations and 50 variables. Several variable names non-syntactic and will require renaming before further analysis.
+
+'IDS_mapping' is a csv file containing 67 observations and 2 variables. On further inspection this data is not in a format appropriate for merging and will require processing before use.
+
+'icd_9_definitions' is a csv file containing 977 observations and 2 variables - one contains category names and the other the numeric codes that map to these.
+
+#### Tasks
+
+-   rename non-syntactic variable names in diabetic data
+
+-   re-format IDS_mapping to allow merge with diabetic data
+
+# Data Quality
+
+## "diabetic_data"
+
+### Accuracy
+
+How accurately does the data reflect reality?
+
+```{r}
+# explore category levels
+diabetic_data %>% 
+    select(where(is.character)) %>% 
+    map(~ unique(.x) %>% sort %>% head(10))
+```
+
+Levels for categorical data appear to be consistent with expected values.
+
+Potential issues:
+
+-   current multinomial response includes those readmitted after 30 days which is not information I require
+
+-   non-binary genders not represented
+
+-   age: covers all ages - babies to elderly although no age category exists for over 100 ?any data
+
+-   factor levels represented by numeric data for several categorical variables
+
+    -   need to look at IDS mapping to check accuracy
+
+-   diagnoses codes - not clear what they map too
+
+    -   need to compare to ICD-9 database to check accuracy
+
+### Completeness
+
+```{r}
+# completeness
+map_dbl(diabetic_data, ~ mean(is.na(.x))) %>% 
+    enframe() %>% 
+    arrange(desc(value))
+```
+
+Raw data does not appear to have any data encoded as missing. On visual inspection it appears that missing data may be represented by values such as "?".
+
+```{r}
+# explore category levels
+diabetic_data %>% 
+    select(where(is.character)) %>% 
+    map(~ unique(.x) %>% sort %>% head(10))
+```
+
+Confirms suspicion around use of character values to encode missing data.
+
+```{r}
+# encode missing data and reexplore
+diabetic_data %>% 
+    mutate(across(where(is.character), ~ na_if(.x, "?"))) %>%
+    mutate(across(where(is.character), ~ na_if(.x, "Unknown/Invalid"))) %>% 
+    skim()
+```
+
+Missing data now explicit and as expected
+
+### Consistency
+
+Less of an issue as dealing with a static dataset that has already been collected. There do not appear to be instances of the same data being recorded using different values.
+
+### Timeliness
+
+-   Not sure how timely data collection was.
+
+    -   No date provided for observations/encounters.
+
+    -   Assumption made that encounter ids ordered by time.
+
+-   Potential for censoring of outcomes.
+
+    -   Patients admitted in the last 30 days of the data collection may have been readmitted within 30 days but this would have been after data collection had finished.
+
+-   Historic data may not be applicable to current patients due to changing medical care and healthcare provision.
+
+### Uniqueness
+
+```{r}
+nrow(diabetic_data)
+n_distinct(diabetic_data$encounter_id)
+n_distinct(diabetic_data$patient_nbr)
+```
+
+Data consists of 101766 observations each representing a distinct clinical encounter but there are only 71518 distinct patients. This implies that some patients have multiple encounters which may cause issues due to lack of independence between observations and increased weight being given to their data.
+
+### Validity
+
+```{r}
+diabetic_data %>% 
+    select(time_in_hospital, contains("num")) %>% 
+    skim()
+```
+
+Numeric features appear to contain valid values.
+
+## "IDS_mapping"
+
+### Accuracy
+
+```{r}
+glimpse(IDS_mapping)
+```
+
+Data is not formatted correctly - this needs correcting prior to assessing accuracy
+
+```{r}
+# re-formatting IDS_mapping
+
+split_IDS_mapping <- 
+    IDS_mapping %>%
+    names() %>%
+    as_tibble() %>%
+    pivot_wider(names_from = value) %>%
+    rbind(IDS_mapping) %>%
+    setNames(c("X1", "X2")) %>% 
+    
+    # create column where each row contains feature name
+    mutate(feature = if_else(str_detect(X1, "[:digit:]"), NA, X1)) %>%
+    fill(feature) %>%
+    
+    # remove rows containing headers and NAs
+    filter(feature != X1) %>%
+    
+    # create named data frames stored in a list and format to aid merge with diabetes data
+    split(.$feature) %>%
+    map( ~ select(., -feature)) %>%
+    map( ~ mutate(., X1 = as.numeric(X1))) %>%
+    map( ~ mutate(., X2 = as_factor(X2))) %>%
+    map2(.x = ., .y = names(.), .f = ~ set_names(.x, .y, paste0(.y, "_value")))
+```
+
+```{r}
+split_IDS_mapping
+```
+
+Each of these 3 data frames appear to be accurate.
+
+## "icd_9_definitions"
+
+#### Accuracy
+
+```{r}
+icd_9_definitions
+```
+
+#### Completeness
+
+-   Using icd_data package results in complete icd 9 codes being available.
+
+    -   levels: major, sub_chapter, chapter
+
+## Tasks
+
+-   recode "?" and "Unknown/Invalid" as explicitly missing (NA)
+
+-   remove observations for repeat admissions
+
+-   reformat IDS mapping data using code developed above
+
+-   decide which levels of icd9 data to keep when merging with diag\_\*.
+
+## Next Steps:
+
+1.  clean data and produce processed set for initial exploration
